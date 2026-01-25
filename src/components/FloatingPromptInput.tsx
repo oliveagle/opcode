@@ -24,19 +24,6 @@ import { SlashCommandPicker } from "./SlashCommandPicker";
 import { ImagePreview } from "./ImagePreview";
 import { type FileEntry, type SlashCommand } from "@/lib/api";
 
-// Conditional import for Tauri webview window
-let tauriGetCurrentWebviewWindow: any;
-try {
-  if (typeof window !== 'undefined' && window.__TAURI__) {
-    tauriGetCurrentWebviewWindow = require("@tauri-apps/api/webviewWindow").getCurrentWebviewWindow;
-  }
-} catch (e) {
-  console.log('[FloatingPromptInput] Tauri webview API not available, using web mode');
-}
-
-// Web-compatible replacement
-const getCurrentWebviewWindow = tauriGetCurrentWebviewWindow || (() => ({ listen: () => Promise.resolve(() => {}) }));
-
 interface FloatingPromptInputProps {
   /**
    * Callback when prompt is sent
@@ -237,10 +224,13 @@ const FloatingPromptInputInner = (
   const [cursorPosition, setCursorPosition] = useState(0);
   const [embeddedImages, setEmbeddedImages] = useState<string[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const expandedTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const unlistenDragDropRef = useRef<(() => void) | null>(null);
+  // Tauri drag-drop ref (only used in Tauri desktop mode)
+  // const unlistenDragDropRef = useRef<(() => void) | null>(null);
+  const resizeHandleRef = useRef<HTMLDivElement>(null);
   const [textareaHeight, setTextareaHeight] = useState<number>(48);
   const isIMEComposingRef = useRef(false);
 
@@ -347,18 +337,22 @@ const FloatingPromptInputInner = (
     const imagePaths = extractImagePaths(prompt);
     console.log('[useEffect] Setting embeddedImages to:', imagePaths);
     setEmbeddedImages(imagePaths);
-    
+
     // Auto-resize on prompt change (handles paste, programmatic changes, etc.)
+    // Use different max height for mobile vs desktop
     if (textareaRef.current && !isExpanded) {
       textareaRef.current.style.height = 'auto';
       const scrollHeight = textareaRef.current.scrollHeight;
-      const newHeight = Math.min(Math.max(scrollHeight, 48), 240);
+      const isMobile = window.innerWidth < 768;
+      const maxHeight = isMobile ? 120 : 240;
+      const newHeight = Math.min(Math.max(scrollHeight, 48), maxHeight);
       setTextareaHeight(newHeight);
       textareaRef.current.style.height = `${newHeight}px`;
     }
   }, [prompt, projectPath, isExpanded]);
 
-  // Set up Tauri drag-drop event listener
+  // Tauri drag-drop event listener - disabled in web mode
+  /*
   useEffect(() => {
     // This effect runs only once on component mount to set up the listener.
     let lastDropTime = 0;
@@ -381,8 +375,6 @@ const FloatingPromptInputInner = (
 
             const currentTime = Date.now();
             if (currentTime - lastDropTime < 200) {
-              // This debounce is crucial to handle the storm of drop events
-              // that Tauri/OS can fire for a single user action.
               return;
             }
             lastDropTime = currentTime;
@@ -396,12 +388,10 @@ const FloatingPromptInputInner = (
                 const newPaths = imagePaths.filter(p => !existingPaths.includes(p));
 
                 if (newPaths.length === 0) {
-                  return currentPrompt; // All dropped images are already in the prompt
+                  return currentPrompt;
                 }
 
-                // Wrap paths with spaces in quotes for clarity
                 const mentionsToAdd = newPaths.map(p => {
-                  // If path contains spaces, wrap in quotes
                   if (p.includes(' ')) {
                     return `@"${p}"`;
                   }
@@ -428,13 +418,13 @@ const FloatingPromptInputInner = (
     setupListener();
 
     return () => {
-      // On unmount, ensure we clean up the listener.
       if (unlistenDragDropRef.current) {
         unlistenDragDropRef.current();
         unlistenDragDropRef.current = null;
       }
     };
-  }, []); // Empty dependency array ensures this runs only on mount/unmount.
+  }, []);
+  */
 
   useEffect(() => {
     // Focus the appropriate textarea when expanded state changes
@@ -448,14 +438,16 @@ const FloatingPromptInputInner = (
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value;
     const newCursorPosition = e.target.selectionStart || 0;
-    
+
     // Auto-resize textarea based on content
     if (textareaRef.current && !isExpanded) {
       // Reset height to auto to get the actual scrollHeight
       textareaRef.current.style.height = 'auto';
       const scrollHeight = textareaRef.current.scrollHeight;
-      // Set min height to 48px and max to 240px (about 10 lines)
-      const newHeight = Math.min(Math.max(scrollHeight, 48), 240);
+      // Use different max height for mobile vs desktop
+      const isMobile = window.innerWidth < 768;
+      const maxHeight = isMobile ? 120 : 240;
+      const newHeight = Math.min(Math.max(scrollHeight, 48), maxHeight);
       setTextareaHeight(newHeight);
       textareaRef.current.style.height = `${newHeight}px`;
     }
@@ -713,6 +705,41 @@ const FloatingPromptInputInner = (
     }
   };
 
+  // Manual resize handler
+  const handleResizeStart = (e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+
+    const startY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const startHeight = textareaHeight;
+
+    const handleMouseMove = (moveEvent: MouseEvent | TouchEvent) => {
+      const currentY = 'touches' in moveEvent ? moveEvent.touches[0].clientY : moveEvent.clientY;
+      const deltaY = startY - currentY;
+      const isMobile = window.innerWidth < 768;
+      const maxHeight = isMobile ? 200 : 400; // Allow manual resize to go higher than auto
+      const newHeight = Math.min(Math.max(startHeight + deltaY, 48), maxHeight);
+      setTextareaHeight(newHeight);
+
+      if (textareaRef.current) {
+        textareaRef.current.style.height = `${newHeight}px`;
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('touchmove', handleMouseMove);
+      document.removeEventListener('touchend', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('touchmove', handleMouseMove, { passive: false });
+    document.addEventListener('touchend', handleMouseUp);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (showFilePicker && e.key === 'Escape') {
       e.preventDefault();
@@ -793,18 +820,21 @@ const FloatingPromptInputInner = (
     }
   };
 
-  // Browser drag and drop handlers - just prevent default behavior
-  // Actual file handling is done via Tauri's window-level drag-drop events
+  // Browser drag and drop handlers - works in web mode
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    // Visual feedback is handled by Tauri events
+    if (e.type === 'enter' || e.type === 'over') {
+      setDragActive(true);
+    } else if (e.type === 'leave') {
+      setDragActive(false);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    // File processing is handled by Tauri's onDragDropEvent
+    setDragActive(false);
   };
 
   const handleRemoveImage = (index: number) => {
@@ -1078,10 +1108,10 @@ const FloatingPromptInputInner = (
             />
           )}
 
-          <div className="p-3">
-            <div className="flex items-end gap-2">
+          <div className="p-3 md:p-3 p-2">
+            <div className="flex items-end gap-2 md:gap-2 gap-1">
               {/* Model & Thinking Mode Selectors - Left side, fixed at bottom */}
-              <div className="flex items-center gap-1 shrink-0 mb-1">
+              <div className="flex items-center gap-1 shrink-0 md:mb-1 mb-0.5">
                 <Popover
                   trigger={
                     <Tooltip>
@@ -1094,7 +1124,7 @@ const FloatingPromptInputInner = (
                               variant="ghost"
                               size="sm"
                               disabled={disabled}
-                              className="h-9 px-2 hover:bg-accent/50 gap-1"
+                              className="h-9 md:h-9 md:px-2 px-1.5 hover:bg-accent/50 gap-1"
                             >
                               <span className={selectedModelData.color}>
                                 {selectedModelData.icon}
@@ -1160,7 +1190,7 @@ const FloatingPromptInputInner = (
                               variant="ghost"
                               size="sm"
                               disabled={disabled}
-                              className="h-9 px-2 hover:bg-accent/50 gap-1"
+                              className="h-9 md:h-9 md:px-2 px-1.5 hover:bg-accent/50 gap-1"
                             >
                               <span className={THINKING_MODES.find(m => m.id === selectedThinkingMode)?.color}>
                                 {THINKING_MODES.find(m => m.id === selectedThinkingMode)?.icon}
@@ -1219,6 +1249,23 @@ const FloatingPromptInputInner = (
 
               {/* Prompt Input - Center */}
               <div className="flex-1 relative">
+                {/* Resize handle - visible at the top of the input */}
+                <div
+                  ref={resizeHandleRef}
+                  onMouseDown={handleResizeStart}
+                  onTouchStart={handleResizeStart}
+                  className={cn(
+                    "absolute -top-1 left-1/2 transform -translate-x-1/2 z-10 cursor-ns-resize",
+                    "flex items-center justify-center",
+                    "md:opacity-0 hover:md:opacity-100 transition-opacity",
+                    "md:hover:bg-muted/50",
+                    isResizing && "opacity-100"
+                  )}
+                  style={{ width: '48px', height: '12px' }}
+                >
+                  <div className="w-10 h-1 bg-muted-foreground/40 rounded-full md:bg-muted-foreground/20" />
+                </div>
+
                 <Textarea
                   ref={textareaRef}
                   value={prompt}
@@ -1235,12 +1282,13 @@ const FloatingPromptInputInner = (
                   disabled={disabled}
                   className={cn(
                     "resize-none pr-20 pl-3 py-2.5 transition-all duration-150",
+                    "md:py-2.5 py-2", // Smaller padding on mobile
                     dragActive && "border-primary",
-                    textareaHeight >= 240 && "overflow-y-auto scrollbar-thin"
+                    textareaHeight >= 120 && "overflow-y-auto scrollbar-thin"
                   )}
                   style={{
                     height: `${textareaHeight}px`,
-                    overflowY: textareaHeight >= 240 ? 'auto' : 'hidden'
+                    overflowY: textareaHeight >= 120 ? 'auto' : 'hidden'
                   }}
                 />
 

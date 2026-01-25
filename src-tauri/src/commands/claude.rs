@@ -1268,8 +1268,6 @@ async fn spawn_claude_process(
             if let Some(ref session_id) = *session_id_holder_clone.lock().unwrap() {
                 let _ = app_handle.emit(&format!("claude-output:{}", session_id), &line);
             }
-            // Also emit to the generic event for backward compatibility
-            let _ = app_handle.emit("claude-output", &line);
         }
     });
 
@@ -1283,8 +1281,6 @@ async fn spawn_claude_process(
             if let Some(ref session_id) = *session_id_holder_clone2.lock().unwrap() {
                 let _ = app_handle_stderr.emit(&format!("claude-error:{}", session_id), &line);
             }
-            // Also emit to the generic event for backward compatibility
-            let _ = app_handle_stderr.emit("claude-error", &line);
         }
     });
 
@@ -1310,8 +1306,6 @@ async fn spawn_claude_process(
                         let _ = app_handle_wait
                             .emit(&format!("claude-complete:{}", session_id), status.success());
                     }
-                    // Also emit to the generic event for backward compatibility
-                    let _ = app_handle_wait.emit("claude-complete", status.success());
                 }
                 Err(e) => {
                     log::error!("Failed to wait for Claude process: {}", e);
@@ -1321,8 +1315,6 @@ async fn spawn_claude_process(
                         let _ =
                             app_handle_wait.emit(&format!("claude-complete:{}", session_id), false);
                     }
-                    // Also emit to the generic event for backward compatibility
-                    let _ = app_handle_wait.emit("claude-complete", false);
                 }
             }
         }

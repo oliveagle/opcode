@@ -5,17 +5,17 @@
   <h1>opcode</h1>
   
   <p>
-    <strong>A powerful GUI app and Toolkit for Claude Code</strong>
+    <strong>A powerful web toolkit for Claude Code</strong>
   </p>
   <p>
-    <strong>Create custom agents, manage interactive Claude Code sessions, run secure background agents, and more.</strong>
+    <strong>Run anywhere - browser, server, or mobile. Create custom agents, manage interactive Claude Code sessions, run secure background agents, and more.</strong>
   </p>
   
   <p>
     <a href="#features"><img src="https://img.shields.io/badge/Features-✨-blue?style=for-the-badge" alt="Features"></a>
-    <a href="#installation"><img src="https://img.shields.io/badge/Install-🚀-green?style=for-the-badge" alt="Installation"></a>
-    <a href="#usage"><img src="https://img.shields.io/badge/Usage-📖-purple?style=for-the-badge" alt="Usage"></a>
-    <a href="#development"><img src="https://img.shields.io/badge/Develop-🛠️-orange?style=for-the-badge" alt="Development"></a>
+    <a href="#quick-start"><img src="https://img.shields.io/badge/Quick%20Start-🚀-green?style=for-the-badge" alt="Quick Start"></a>
+    <a href="#architecture"><img src="https://img.shields.io/badge/Architecture-🏗️-orange?style=for-the-badge" alt="Architecture"></a>
+    <a href="#development"><img src="https://img.shields.io/badge/Develop-🛠️-purple?style=for-the-badge" alt="Development"></a>
     <a href="https://discord.com/invite/KYwhHVzUsY"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   </p>
 </div>
@@ -36,34 +36,74 @@ https://github.com/user-attachments/assets/6bceea0f-60b6-4c3e-a745-b891de00b8d0
 
 ## 🌟 Overview
 
-**opcode** is a powerful desktop application that transforms how you interact with Claude Code. Built with Tauri 2, it provides a beautiful GUI for managing your Claude Code sessions, creating custom agents, tracking usage, and much more.
+**opcode** is a powerful web-based toolkit for Claude Code. Originally a desktop application built with Tauri, it has evolved into a modern web application that runs anywhere - in your browser, on a server, or on your phone.
 
-Think of opcode as your command center for Claude Code - bridging the gap between the command-line tool and a visual experience that makes AI-assisted development more intuitive and productive.
+Think of opcode as your command center for Claude Code - a beautiful web interface that makes AI-assisted development more intuitive and productive, accessible from any device.
 
 ## 📋 Table of Contents
 
 - [🌟 Overview](#-overview)
+- [🚀 Quick Start](#-quick-start)
+- [🏗️ Architecture](#-architecture)
 - [✨ Features](#-features)
-  - [🗂️ Project & Session Management](#️-project--session-management)
-  - [🤖 CC Agents](#-cc-agents)
-  
-  - [📊 Usage Analytics Dashboard](#-usage-analytics-dashboard)
-  - [🔌 MCP Server Management](#-mcp-server-management)
-  - [⏰ Timeline & Checkpoints](#-timeline--checkpoints)
-  - [📝 CLAUDE.md Management](#-claudemd-management)
 - [📖 Usage](#-usage)
-  - [Getting Started](#getting-started)
-  - [Managing Projects](#managing-projects)
-  - [Creating Agents](#creating-agents)
-  - [Tracking Usage](#tracking-usage)
-  - [Working with MCP Servers](#working-with-mcp-servers)
-- [🚀 Installation](#-installation)
-- [🔨 Build from Source](#-build-from-source)
-- [🛠️ Development](#️-development)
+- [🔨 Development](#️-development)
 - [🔒 Security](#-security)
 - [🤝 Contributing](#-contributing)
 - [📄 License](#-license)
 - [🙏 Acknowledgments](#-acknowledgments)
+
+## 🚀 Quick Start
+
+```bash
+# Clone and enter the project
+git clone https://github.com/getAsterisk/opcode.git
+cd opcode
+
+# Install dependencies
+bun install
+
+# Start the web server (frontend + API)
+just dev-web
+```
+
+Then open **http://localhost:1420** in your browser.
+
+### Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `just dev-web` | Start frontend dev server (0.0.0.0:1420) |
+| `just web` | Run full web server with Rust backend |
+| `just web-port 8080` | Run web server on custom port |
+
+## 🏗️ Architecture
+
+```
+opcode/
+├── src/                   # React frontend
+│   ├── components/        # UI components
+│   ├── lib/               # API client & utilities
+│   └── assets/            # Static assets
+├── src-tauri/             # Rust backend (also serves web UI)
+│   ├── src/
+│   │   ├── commands/      # API handlers
+│   │   ├── checkpoint/    # Timeline management
+│   │   └── process/       # Process management
+│   └── Cargo.toml
+└── dist/                  # Built frontend assets
+```
+
+### How It Works
+
+1. **Frontend**: React + TypeScript + Vite frontend built for the web
+2. **Backend**: Rust server that handles Claude Code integration and API requests
+3. **Communication**: Frontend communicates with Rust backend via REST API
+
+The backend can be run:
+- **Locally**: Access via localhost
+- **On a Server**: Access via browser from anywhere
+- **On Mobile**: Works on phone browsers via network IP
 
 ## ✨ Features
 
@@ -163,179 +203,68 @@ Menu → MCP Manager → Add Server → Configure
 
 ### Release Executables Will Be Published Soon
 
-## 🔨 Build from Source
+## 🔨 Development
 
 ### Prerequisites
 
-Before building opcode from source, ensure you have the following installed:
-
-#### System Requirements
-
-- **Operating System**: Windows 10/11, macOS 11+, or Linux (Ubuntu 20.04+)
-- **RAM**: Minimum 4GB (8GB recommended)
-- **Storage**: At least 1GB free space
-
-#### Required Tools
+Before developing opcode, ensure you have:
 
 1. **Rust** (1.70.0 or later)
    ```bash
-   # Install via rustup
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
 
 2. **Bun** (latest version)
    ```bash
-   # Install bun
    curl -fsSL https://bun.sh/install | bash
    ```
 
 3. **Git**
-   ```bash
-   # Usually pre-installed, but if not:
-   # Ubuntu/Debian: sudo apt install git
-   # macOS: brew install git
-   # Windows: Download from https://git-scm.com
-   ```
+   - Usually pre-installed on most systems
 
 4. **Claude Code CLI**
-   - Download and install from [Claude's official site](https://claude.ai/code)
-   - Ensure `claude` is available in your PATH
+   - Download from [Claude's official site](https://claude.ai/code)
+   - Ensure `claude` is in your PATH
 
-#### Platform-Specific Dependencies
-
-**Linux (Ubuntu/Debian)**
-```bash
-# Install system dependencies
-sudo apt update
-sudo apt install -y \
-  libwebkit2gtk-4.1-dev \
-  libgtk-3-dev \
-  libayatana-appindicator3-dev \
-  librsvg2-dev \
-  patchelf \
-  build-essential \
-  curl \
-  wget \
-  file \
-  libssl-dev \
-  libxdo-dev \
-  libsoup-3.0-dev \
-  libjavascriptcoregtk-4.1-dev
-```
-
-**macOS**
-```bash
-# Install Xcode Command Line Tools
-xcode-select --install
-
-# Install additional dependencies via Homebrew (optional)
-brew install pkg-config
-```
-
-**Windows**
-- Install [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-- Install [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) (usually pre-installed on Windows 11)
-
-### Build Steps
-
-1. **Clone the Repository**
-   ```bash
-   git clone https://github.com/getAsterisk/opcode.git
-   cd opcode
-   ```
-
-2. **Install Frontend Dependencies**
-   ```bash
-   bun install
-   ```
-
-3. **Build the Application**
-   
-   **For Development (with hot reload)**
-   ```bash
-   bun run tauri dev
-   ```
-   
-   **For Production Build**
-   ```bash
-   # Build the application
-   bun run tauri build
-   
-   # The built executable will be in:
-   # - Linux: src-tauri/target/release/
-   # - macOS: src-tauri/target/release/
-   # - Windows: src-tauri/target/release/
-   ```
-
-4. **Platform-Specific Build Options**
-   
-   **Debug Build (faster compilation, larger binary)**
-   ```bash
-   bun run tauri build --debug
-   ```
-   
-   **Universal Binary for macOS (Intel + Apple Silicon)**
-   ```bash
-   bun run tauri build --target universal-apple-darwin
-   ```
-
-### Troubleshooting
-
-#### Common Issues
-
-1. **"cargo not found" error**
-   - Ensure Rust is installed and `~/.cargo/bin` is in your PATH
-   - Run `source ~/.cargo/env` or restart your terminal
-
-2. **Linux: "webkit2gtk not found" error**
-   - Install the webkit2gtk development packages listed above
-   - On newer Ubuntu versions, you might need `libwebkit2gtk-4.0-dev`
-
-3. **Windows: "MSVC not found" error**
-   - Install Visual Studio Build Tools with C++ support
-   - Restart your terminal after installation
-
-4. **"claude command not found" error**
-   - Ensure Claude Code CLI is installed and in your PATH
-   - Test with `claude --version`
-
-5. **Build fails with "out of memory"**
-   - Try building with fewer parallel jobs: `cargo build -j 2`
-   - Close other applications to free up RAM
-
-#### Verify Your Build
-
-After building, you can verify the application works:
+### Development Commands
 
 ```bash
-# Run the built executable directly
-# Linux/macOS
-./src-tauri/target/release/opcode
+# Install dependencies
+bun install
 
-# Windows
-./src-tauri/target/release/opcode.exe
+# Start frontend dev server (hot reload)
+just dev-web
+
+# Build and run full web server
+just web
+
+# Build frontend for production
+bun run build
+
+# Run Rust tests
+cd src-tauri && cargo test
+
+# Format Rust code
+cd src-tauri && cargo fmt
 ```
 
-### Build Artifacts
+### Access During Development
 
-The build process creates several artifacts:
+| Mode | URL | Access |
+|------|-----|--------|
+| Frontend dev | http://localhost:1420 | Local only |
+| Full server | http://localhost:8080 | Local & network |
 
-- **Executable**: The main opcode application
-- **Installers** (when using `tauri build`):
-  - `.deb` package (Linux)
-  - `.AppImage` (Linux)
-  - `.dmg` installer (macOS)
-  - `.msi` installer (Windows)
-  - `.exe` installer (Windows)
+**For mobile/phone access:**
+```bash
+just ip  # Shows your local IP
+# Then open http://YOUR_IP:1420 on your phone
+```
 
-All artifacts are located in `src-tauri/target/release/`.
-
-## 🛠️ Development
-
-### Tech Stack
+## 🛠️ Tech Stack
 
 - **Frontend**: React 18 + TypeScript + Vite 6
-- **Backend**: Rust with Tauri 2
+- **Backend**: Rust + Axum (web server)
 - **UI Framework**: Tailwind CSS v4 + shadcn/ui
 - **Database**: SQLite (via rusqlite)
 - **Package Manager**: Bun
@@ -350,30 +279,11 @@ opcode/
 │   └── assets/            # Static assets
 ├── src-tauri/             # Rust backend
 │   ├── src/
-│   │   ├── commands/      # Tauri command handlers
+│   │   ├── commands/      # API command handlers
 │   │   ├── checkpoint/    # Timeline management
 │   │   └── process/       # Process management
-│   └── tests/             # Rust test suite
-└── public/                # Public assets
-```
-
-### Development Commands
-
-```bash
-# Start development server
-bun run tauri dev
-
-# Run frontend only
-bun run dev
-
-# Type checking
-bunx tsc --noEmit
-
-# Run Rust tests
-cd src-tauri && cargo test
-
-# Format code
-cd src-tauri && cargo fmt
+│   └── Cargo.toml
+└── dist/                  # Built frontend assets
 ```
 
 ## 🔒 Security
@@ -405,7 +315,9 @@ This project is licensed under the AGPL License - see the [LICENSE](LICENSE) fil
 
 ## 🙏 Acknowledgments
 
-- Built with [Tauri](https://tauri.app/) - The secure framework for building desktop apps
+- [React](https://react.dev/) - UI framework
+- [Vite](https://vitejs.dev/) - Build tool
+- [Tailwind CSS](https://tailwindcss.com/) - Styling
 - [Claude](https://claude.ai) by Anthropic
 
 ---

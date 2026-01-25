@@ -72,6 +72,14 @@ interface ClaudeCodeSessionProps {
    */
   initialProjectPath?: string;
   /**
+   * Whether this tab is currently active
+   */
+  isTabActive?: boolean;
+  /**
+   * Unique tab ID for WebSocket session isolation
+   */
+  tabId?: string;
+  /**
    * Callback to go back
    */
   onBack: () => void;
@@ -102,6 +110,8 @@ interface ClaudeCodeSessionProps {
 export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
   session,
   initialProjectPath = "",
+  isTabActive = true,
+  tabId = 'default',
   className,
   onStreamingChange,
   onProjectPathChange,
@@ -445,6 +455,9 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
     
     // Set up session-specific listeners
     const outputUnlisten = await listen(`claude-output:${sessionId}`, async (event: any) => {
+      // Only process if tab is active
+      if (!isTabActive) return;
+      
       try {
         console.log('[ClaudeCodeSession] Received claude-output on reconnect:', event.payload);
         
@@ -462,6 +475,7 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
     });
 
     const errorUnlisten = await listen(`claude-error:${sessionId}`, (event: any) => {
+      if (!isTabActive) return;
       console.error("Claude error:", event.payload);
       if (isMountedRef.current) {
         setError(event.payload);
@@ -469,6 +483,7 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
     });
 
     const completeUnlisten = await listen(`claude-complete:${sessionId}`, async (event: any) => {
+      if (!isTabActive) return;
       console.log('[ClaudeCodeSession] Received claude-complete on reconnect:', event.payload);
       if (isMountedRef.current) {
         setIsLoading(false);
@@ -547,15 +562,18 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
           console.log('[ClaudeCodeSession] Attaching session-specific listeners for', sid);
 
           const specificOutputUnlisten = await listen(`claude-output:${sid}`, (evt: any) => {
+            if (!isTabActive) return;
             handleStreamMessage(evt.payload);
           });
 
           const specificErrorUnlisten = await listen(`claude-error:${sid}`, (evt: any) => {
+            if (!isTabActive) return;
             console.error('Claude error (scoped):', evt.payload);
             setError(evt.payload);
           });
 
           const specificCompleteUnlisten = await listen(`claude-complete:${sid}`, (evt: any) => {
+            if (!isTabActive) return;
             console.log('[ClaudeCodeSession] Received claude-complete (scoped):', evt.payload);
             processComplete(evt.payload);
           });
@@ -565,8 +583,12 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
           unlistenRefs.current = [specificOutputUnlisten, specificErrorUnlisten, specificCompleteUnlisten];
         };
 
-        // Generic listeners (catch-all)
+        // Generic listeners (catch-all) - only if tab is active
         const genericOutputUnlisten = await listen('claude-output', async (event: any) => {
+          // Only process messages if this tab is active
+          if (!isTabActive) {
+            return;
+          }
           handleStreamMessage(event.payload);
 
           // Attempt to extract session_id on the fly (for the very first init)
@@ -798,11 +820,13 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
         };
 
         const genericErrorUnlisten = await listen('claude-error', (evt: any) => {
+          if (!isTabActive) return;
           console.error('Claude error:', evt.payload);
           setError(evt.payload);
         });
 
         const genericCompleteUnlisten = await listen('claude-complete', (evt: any) => {
+          if (!isTabActive) return;
           console.log('[ClaudeCodeSession] Received claude-complete (generic):', evt.payload);
           processComplete(evt.payload);
         });
@@ -869,17 +893,24 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
         });
 
         // Execute the appropriate command
+        // Only allow sending if this tab is active
+        if (!isTabActive) {
+          console.log('[ClaudeCodeSession] Ignoring prompt - tab is not active');
+          setIsLoading(false);
+          return;
+        }
+
         if (effectiveSession && !isFirstPrompt) {
           console.log('[ClaudeCodeSession] Resuming session:', effectiveSession.id);
           trackEvent.sessionResumed(effectiveSession.id);
           trackEvent.modelSelected(model);
-          await api.resumeClaudeCode(projectPath, effectiveSession.id, prompt, model);
+          await api.resumeClaudeCode(projectPath, effectiveSession.id, prompt, model, tabId);
         } else {
           console.log('[ClaudeCodeSession] Starting new session');
           setIsFirstPrompt(false);
           trackEvent.sessionCreated(model, 'prompt_input');
           trackEvent.modelSelected(model);
-          await api.executeClaudeCode(projectPath, prompt, model);
+          await api.executeClaudeCode(projectPath, prompt, model, tabId);
         }
       }
     } catch (err) {

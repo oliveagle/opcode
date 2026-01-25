@@ -231,80 +231,87 @@ export function getEnvironmentInfo() {
 
 /**
  * Handle streaming commands via WebSocket in web mode
+ * Uses WebSocketSessionManager for per-tab isolation
  */
 async function handleStreamingCommand<T>(command: string, params?: any): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/ws/claude`;
-    console.log(`[TRACE] handleStreamingCommand: ${command}, WebSocket URL: ${wsUrl}`);
-    
-    const ws = new WebSocket(wsUrl);
-    
-    ws.onopen = () => {
-      console.log(`[TRACE] WebSocket opened successfully`);
-      
-      const request = {
-        command_type: command.replace('_claude_code', ''),
-        project_path: params?.projectPath || '',
-        prompt: params?.prompt || '',
-        model: params?.model || 'claude-3-5-sonnet-20241022',
-        session_id: params?.sessionId,
-      };
-      
-      console.log(`[TRACE] Sending WebSocket request:`, request);
-      ws.send(JSON.stringify(request));
-    };
-    
-    ws.onmessage = (event) => {
-      console.log(`[TRACE] WebSocket message:`, event.data);
-      try {
-        const message = JSON.parse(event.data);
-        
-        if (message.type === 'output') {
-          try {
-            const claudeMessage = typeof message.content === 'string' 
-              ? JSON.parse(message.content) 
-              : message.content;
-            const customEvent = new CustomEvent('claude-output', {
-              detail: claudeMessage
-            });
-            window.dispatchEvent(customEvent);
-          } catch (e) {
-            console.error('[TRACE] Failed to parse Claude output:', e);
-          }
-        } else if (message.type === 'completion') {
-          const completeEvent = new CustomEvent('claude-complete', {
-            detail: message.status === 'success'
+  const tabId = params?.tabId || 'default';
+  const sessionId = params?.sessionId || tabId;
+
+  console.log(`[TRACE] handleStreamingCommand: ${command}, tabId: ${tabId}, sessionId: ${sessionId}`);
+
+  return new Promise(async (resolve, reject) => {
+    // Dynamic import for browser compatibility
+    const { wsManager } = await import('./wsSessionManager');
+    const session = wsManager.getOrCreateSession(tabId, sessionId);
+
+    // Register handler for this specific tab
+    const unregister = wsManager.registerHandler(tabId, (message: any) => {
+      console.log(`[TRACE] Received message for tab ${tabId}:`, message);
+
+      if (message.type === 'output') {
+        try {
+          const claudeMessage = typeof message.content === 'string'
+            ? JSON.parse(message.content)
+            : message.content;
+          const customEvent = new CustomEvent('claude-output', {
+            detail: claudeMessage
           });
-          window.dispatchEvent(completeEvent);
-          ws.close();
-          if (message.status === 'success') {
-            resolve({} as T);
-          } else {
-            reject(new Error(message.error || 'Execution failed'));
-          }
-        } else if (message.type === 'error') {
-          const errorEvent = new CustomEvent('claude-error', {
-            detail: message.message || 'Unknown error'
-          });
-          window.dispatchEvent(errorEvent);
-          reject(new Error(message.message || 'Unknown error'));
+          window.dispatchEvent(customEvent);
+        } catch (e) {
+          console.error('[TRACE] Failed to parse Claude output:', e);
         }
-      } catch (e) {
-        console.error('[TRACE] Failed to parse WebSocket message:', e);
+      } else if (message.type === 'completion') {
+        const completeEvent = new CustomEvent('claude-complete', {
+          detail: message.status === 'success'
+        });
+        window.dispatchEvent(completeEvent);
+        unregister();
+        if (message.status === 'success') {
+          resolve({} as T);
+        } else {
+          reject(new Error(message.error || 'Execution failed'));
+        }
+      } else if (message.type === 'error') {
+        const errorEvent = new CustomEvent('claude-error', {
+          detail: message.message || 'Unknown error'
+        });
+        window.dispatchEvent(errorEvent);
+        unregister();
+        reject(new Error(message.message || 'Unknown error'));
+      }
+    });
+
+    // Send request when connection is ready
+    const checkAndSend = () => {
+      if (session.ws.readyState === WebSocket.OPEN) {
+        const request = {
+          command_type: command.replace('_claude_code', ''),
+          project_path: params?.projectPath || '',
+          prompt: params?.prompt || '',
+          model: params?.model || 'claude-3-5-sonnet-20241022',
+          session_id: sessionId,
+        };
+        console.log(`[TRACE] Sending WebSocket request:`, request);
+        session.ws.send(JSON.stringify(request));
+      } else if (session.ws.readyState === WebSocket.CONNECTING) {
+        setTimeout(checkAndSend, 50);
+      } else {
+        unregister();
+        reject(new Error('WebSocket connection failed'));
       }
     };
-    
-    ws.onerror = (error) => {
+
+    session.ws.onerror = (error: Event) => {
       console.error('[TRACE] WebSocket error:', error);
+      unregister();
       const errorEvent = new CustomEvent('claude-error', {
         detail: 'WebSocket connection failed'
       });
       window.dispatchEvent(errorEvent);
       reject(new Error('WebSocket connection failed'));
     };
-    
-    ws.onclose = (event) => {
+
+    session.ws.onclose = (event: CloseEvent) => {
       if (event.code !== 1000 && event.code !== 1001) {
         const cancelEvent = new CustomEvent('claude-complete', {
           detail: false
@@ -312,6 +319,8 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
         window.dispatchEvent(cancelEvent);
       }
     };
+
+    checkAndSend();
   });
 }
 

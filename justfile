@@ -29,11 +29,11 @@ build: install build-frontend build-backend
 
 # Run the application in development mode
 run: build-frontend
-    cd src-tauri && cargo run
+    cd src-tauri && cargo run --bin opcode
 
 # Run the application (release mode)
 run-release: build-frontend build-backend-release
-    cd src-tauri && cargo run --release
+    cd src-tauri && cargo run --release --bin opcode
 
 # Clean all build artifacts
 clean:
@@ -42,7 +42,7 @@ clean:
 
 # Development server (requires frontend build first)
 dev: build-frontend
-    cd src-tauri && cargo run
+    cd src-tauri && cargo run --bin opcode
 
 # Run tests
 test:
@@ -58,18 +58,31 @@ check:
 
 # Quick development cycle: build frontend and run
 quick: build-frontend
-    cd src-tauri && cargo run
+    cd src-tauri && cargo run --bin opcode
 
 # Full rebuild from scratch
-rebuild: clean build run
+rebuild: clean build
+    cd src-tauri && cargo run --bin opcode
 
-# Run web server mode for phone access
+# Run web server mode (full stack: frontend + backend)
 web: build-frontend
     cd src-tauri && cargo run --bin opcode-web
 
 # Run web server on custom port
 web-port PORT: build-frontend
     cd src-tauri && cargo run --bin opcode-web -- --port {{PORT}}
+
+# Run web server on custom host and port
+web-host-port HOST PORT: build-frontend
+    cd src-tauri && cargo run --bin opcode-web -- --host {{HOST}} --port {{PORT}}
+
+# Kill processes on port 8080
+kill:
+    @lsof -ti :8080 | xargs -r kill -9 && echo "✅ Port 8080 cleared" || echo "No processes on port 8080"
+
+# Kill all opcode processes
+kill-all:
+    @pkill -f opcode-web && echo "✅ All opcode processes killed" || echo "No opcode processes found"
 
 # Install Tauri system dependencies (Linux)
 deps:
@@ -90,9 +103,13 @@ deps:
       libgdk-pixbuf2.0-dev \
       libcairo2-dev
 
-# Run frontend dev server (0.0.0.0 - for phone access)
+# Run frontend dev server only (hot reload, no backend)
 dev-web:
     bun run dev
+
+# Run full web server (frontend + Rust backend) - best for testing!
+dev-full: build-frontend
+    cd src-tauri && cargo run --bin opcode-web
 
 # Show local IP for phone access
 ip:
@@ -103,22 +120,19 @@ ip:
 
 # Show build information
 info:
-    @echo "🚀 Opcode - Claude Code GUI Application"
-    @echo "Built for NixOS without Docker"
+    @echo "🚀 Opcode - Claude Code Web Toolkit"
     @echo ""
-    @echo "📦 Frontend: React + TypeScript + Vite"
-    @echo "🦀 Backend: Rust + Tauri"
-    @echo "🏗️  Build System: Nix + Just"
+    @echo "🏗️  Stack: React + TypeScript + Vite (Frontend) | Rust + Axum (Backend)"
     @echo ""
-    @echo "💡 Common commands:"
-    @echo "  just run       - Build and run (desktop)"
-    @echo "  just web       - Run Tauri web server for phone access"
-    @echo "  just dev-web   - Run frontend dev server (0.0.0.0:1420)"
-    @echo "  just quick     - Quick build and run"
-    @echo "  just rebuild   - Full clean rebuild"
-    @echo "  just shell     - Enter Nix environment"
-    @echo "  just deps      - Install Tauri system dependencies"
-    @echo "  just ip        - Show IP for phone access"
+    @echo "💡 Web Commands:"
+    @echo "  just dev-web      - Frontend only (hot reload, localhost:1420)"
+    @echo "  just web          - Full stack (frontend + backend, localhost:8080)"
+    @echo "  just web-port 9000 - Full stack on custom port"
+    @echo "  just ip           - Show local IP for phone access"
+    @echo ""
+    @echo "💻 Dev Commands:"
+    @echo "  just build        - Build everything"
+    @echo "  just test         - Run Rust tests"
 
 # =============================================================================
 # Container/Podman commands

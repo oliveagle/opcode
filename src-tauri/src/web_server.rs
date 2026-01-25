@@ -260,20 +260,22 @@ fn list_tables_impl(db_path: &std::path::PathBuf) -> Result<Vec<TableInfo>, Stri
 #[derive(Deserialize)]
 struct ReadTableQuery {
     page: Option<i64>,
-    pageSize: Option<i64>,
-    searchQuery: Option<String>,
+    #[serde(rename = "pageSize")]
+    page_size: Option<i64>,
+    #[serde(rename = "searchQuery")]
+    search_query: Option<String>,
 }
 
 async fn storage_read_table(
-    Path(tableName): Path<String>,
+    Path(table_name): Path<String>,
     Query(query): Query<ReadTableQuery>,
     AxumState(state): AxumState<AppState>,
 ) -> impl axum::response::IntoResponse {
     let page = query.page.unwrap_or(1);
-    let page_size = query.pageSize.unwrap_or(50);
-    let search_query = query.searchQuery;
+    let page_size = query.page_size.unwrap_or(50);
+    let search_query = query.search_query;
 
-    match read_table_impl(&state.db_path, &tableName, page, page_size, search_query) {
+    match read_table_impl(&state.db_path, &table_name, page, page_size, search_query) {
         Ok(data) => Json(ApiResponse::success(data)),
         Err(e) => Json(ApiResponse::error(e.to_string())),
     }
@@ -429,7 +431,7 @@ fn insert_row_impl(
 }
 
 async fn storage_insert_row(
-    Path(tableName): Path<String>,
+    Path(table_name): Path<String>,
     AxumState(state): AxumState<AppState>,
     Json(req): Json<InsertRowRequest>,
 ) -> impl axum::response::IntoResponse {
@@ -439,7 +441,7 @@ async fn storage_insert_row(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    match insert_row_impl(&conn, &tableName, req.values) {
+    match insert_row_impl(&conn, &table_name, req.values) {
         Ok(id) => Json(ApiResponse::success(id)),
         Err(e) => Json(ApiResponse::error(e)),
     }
@@ -499,7 +501,7 @@ fn update_row_impl(
 }
 
 async fn storage_update_row(
-    Path(tableName): Path<String>,
+    Path(table_name): Path<String>,
     AxumState(state): AxumState<AppState>,
     Json(req): Json<UpdateRowRequest>,
 ) -> impl axum::response::IntoResponse {
@@ -509,7 +511,7 @@ async fn storage_update_row(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    match update_row_impl(&conn, &tableName, req.primary_key_values, req.updates) {
+    match update_row_impl(&conn, &table_name, req.primary_key_values, req.updates) {
         Ok(_) => Json(ApiResponse::success(())),
         Err(e) => Json(ApiResponse::error(e)),
     }
@@ -544,7 +546,7 @@ fn delete_row_impl(
 }
 
 async fn storage_delete_row(
-    Path(tableName): Path<String>,
+    Path(table_name): Path<String>,
     AxumState(state): AxumState<AppState>,
     Json(req): Json<DeleteRowRequest>,
 ) -> impl axum::response::IntoResponse {
@@ -554,7 +556,7 @@ async fn storage_delete_row(
         Err(e) => return Json(ApiResponse::error(e)),
     };
 
-    match delete_row_impl(&conn, &tableName, req.primary_key_values) {
+    match delete_row_impl(&conn, &table_name, req.primary_key_values) {
         Ok(_) => Json(ApiResponse::success(())),
         Err(e) => Json(ApiResponse::error(e)),
     }
@@ -608,6 +610,7 @@ async fn get_sessions(
 
 /// Agent request/response types
 #[derive(Deserialize, Serialize)]
+#[allow(dead_code)]
 struct AgentRow {
     id: Option<i64>,
     name: String,
@@ -1168,8 +1171,8 @@ async fn mcp_list() -> impl axum::response::IntoResponse {
 
 /// Add MCP server
 async fn mcp_add(
-    AxumState(state): AxumState<AppState>,
-    Json(req): Json<serde_json::Value>,
+    AxumState(_state): AxumState<AppState>,
+    Json(_req): Json<serde_json::Value>,
 ) -> impl axum::response::IntoResponse {
     // For now, just acknowledge the request
     // Full MCP management would require a separate table
@@ -1210,17 +1213,17 @@ async fn resume_claude_code() -> Json<ApiResponse<serde_json::Value>> {
 }
 
 /// Cancel Claude execution
-async fn cancel_claude_execution(Path(sessionId): Path<String>) -> Json<ApiResponse<()>> {
+async fn cancel_claude_execution(Path(session_id): Path<String>) -> Json<ApiResponse<()>> {
     // In web mode, we don't have a way to cancel the subprocess cleanly
     // The WebSocket closing should handle cleanup
-    println!("[TRACE] Cancel request for session: {}", sessionId);
+    println!("[TRACE] Cancel request for session: {}", session_id);
     Json(ApiResponse::success(()))
 }
 
 /// Get Claude session output
-async fn get_claude_session_output(Path(sessionId): Path<String>) -> Json<ApiResponse<String>> {
+async fn get_claude_session_output(Path(session_id): Path<String>) -> Json<ApiResponse<String>> {
     // In web mode, output is streamed via WebSocket, not stored
-    println!("[TRACE] Output request for session: {}", sessionId);
+    println!("[TRACE] Output request for session: {}", session_id);
     Json(ApiResponse::success(
         "Output available via WebSocket only".to_string(),
     ))
@@ -1637,6 +1640,58 @@ async fn resume_claude_command(
     println!("[resume_claude_command] Starting with project_path: {}, claude_session_id: {}, prompt: {}, model: {}", 
              project_path, claude_session_id, prompt, model);
 
+    // Convert agent-xxx format to real session UUID if needed
+    let real_session_id = if claude_session_id.starts_with("agent-") {
+        let agent_id = &claude_session_id[6..];
+        let agent_file_path = format!("{}/agent-{}.jsonl", 
+            project_path.trim_end_matches('/'),
+            agent_id);
+        println!("[resume_claude_command] Looking for agent session file: {}", agent_file_path);
+        
+        if let Ok(content) = tokio::fs::read_to_string(&agent_file_path).await {
+            if let Some(session_start) = content.find("\"sessionId\":\"") {
+                let session_part = &content[session_start + 13..];
+                if let Some(session_end) = session_part.find('\"') {
+                    let uuid = &session_part[..session_end];
+                    println!("[resume_claude_command] Found real session UUID: {}", uuid);
+                    uuid.to_string()
+                } else {
+                    claude_session_id
+                }
+            } else {
+                claude_session_id
+            }
+        } else if let Some(home_dir) = dirs::home_dir() {
+            let project_name = project_path.trim_start_matches('/');
+            let project_dir = project_name.replace('/', "-").replace("\\", "-");
+            let alt_path = format!("{}/.claude/projects/{}/{}.jsonl", 
+                home_dir.display(),
+                project_dir,
+                claude_session_id);
+            
+            if let Ok(content) = tokio::fs::read_to_string(&alt_path).await {
+                if let Some(session_start) = content.find("\"sessionId\":\"") {
+                    let session_part = &content[session_start + 13..];
+                    if let Some(session_end) = session_part.find('\"') {
+                        let uuid = &session_part[..session_end];
+                        println!("[resume_claude_command] Found real session UUID: {}", uuid);
+                        uuid.to_string()
+                    } else {
+                        claude_session_id
+                    }
+                } else {
+                    claude_session_id
+                }
+            } else {
+                claude_session_id
+            }
+        } else {
+            claude_session_id
+        }
+    } else {
+        claude_session_id
+    };
+
     send_to_session(
         &state,
         &session_id,
@@ -1662,7 +1717,7 @@ async fn resume_claude_command(
     let mut cmd = Command::new(&claude_path);
     let args = [
         "--resume",
-        &claude_session_id,
+        &real_session_id,
         "-p",
         &prompt,
         "--model",
