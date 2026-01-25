@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Settings, Minus, Square, X, Bot, BarChart3, FileText, Network, Info, MoreVertical, Activity } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { TooltipProvider, TooltipSimple } from '@/components/ui/tooltip-modern';
+import { ProcessMonitorPopover } from '@/components/ProcessMonitorPopover';
+import { api } from '@/lib/api';
 
 interface CustomTitlebarProps {
   onSettingsClick?: () => void;
@@ -10,7 +12,6 @@ interface CustomTitlebarProps {
   onUsageClick?: () => void;
   onClaudeClick?: () => void;
   onMCPClick?: () => void;
-  onProcessMonitorClick?: () => void;
   onInfoClick?: () => void;
 }
 
@@ -20,11 +21,12 @@ export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
   onUsageClick,
   onClaudeClick,
   onMCPClick,
-  onProcessMonitorClick,
   onInfoClick
 }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [showProcessMonitor, setShowProcessMonitor] = useState(false);
+  const [runningProcessCount, setRunningProcessCount] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -32,10 +34,32 @@ export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsDropdownOpen(false);
       }
+      // Close process monitor popover when clicking outside
+      const target = event.target as Node;
+      const popover = document.querySelector('[data-process-monitor-popover="true"]');
+      if (showProcessMonitor && popover && !popover.contains(target)) {
+        setShowProcessMonitor(false);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showProcessMonitor]);
+
+  // Fetch process count periodically
+  useEffect(() => {
+    const fetchProcessCount = async () => {
+      try {
+        const stats = await api.getProcessStats();
+        setRunningProcessCount(stats.total_processes);
+      } catch (err) {
+        console.error('Failed to fetch process count:', err);
+      }
+    };
+
+    fetchProcessCount();
+    const interval = setInterval(fetchProcessCount, 5000); // Update every 5 seconds
+    return () => clearInterval(interval);
   }, []);
 
   const handleMinimize = async () => {
@@ -166,6 +190,25 @@ export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
               </motion.button>
             </TooltipSimple>
           )}
+
+          {/* Process Monitor Button - always shown next to stats */}
+          <TooltipSimple content="Process Monitor" side="bottom">
+            <motion.button
+              onClick={() => setShowProcessMonitor(!showProcessMonitor)}
+              whileTap={{ scale: 0.97 }}
+              transition={{ duration: 0.15 }}
+              className={`p-2 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors tauri-no-drag relative ${
+                showProcessMonitor ? 'bg-accent text-accent-foreground' : ''
+              }`}
+            >
+              <Activity size={16} />
+              {runningProcessCount > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+                  {runningProcessCount}
+                </span>
+              )}
+            </motion.button>
+          </TooltipSimple>
         </div>
 
         {/* Visual separator */}
@@ -228,19 +271,6 @@ export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
                     </button>
                   )}
 
-                  {onProcessMonitorClick && (
-                    <button
-                      onClick={() => {
-                        onProcessMonitorClick();
-                        setIsDropdownOpen(false);
-                      }}
-                      className="w-full px-4 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground transition-colors flex items-center gap-3"
-                    >
-                      <Activity size={14} />
-                      <span>Process Monitor</span>
-                    </button>
-                  )}
-
                   {onInfoClick && (
                     <button
                       onClick={() => {
@@ -260,6 +290,15 @@ export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
         </div>
       </div>
     </div>
+
+    {/* Process Monitor Popover */}
+    <AnimatePresence>
+      {showProcessMonitor && (
+        <div data-process-monitor-popover="true">
+          <ProcessMonitorPopover onClose={() => setShowProcessMonitor(false)} />
+        </div>
+      )}
+    </AnimatePresence>
     </TooltipProvider>
   );
 };

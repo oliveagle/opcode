@@ -464,6 +464,14 @@ function mapCommandToEndpoint(command: string, _params?: any): string {
     'slash_command_get': '/api/slash-commands/{commandId}',
     'slash_command_save': '/api/slash-commands',
     'slash_command_delete': '/api/slash-commands/{commandId}',
+
+    // Process monitor commands
+    'get_all_processes': '/api/processes',
+    'get_process_stats': '/api/processes/stats',
+    'kill_process_by_run_id': '/api/processes/{runId}/kill',
+    'kill_all_processes': '/api/processes/kill/all',
+    'kill_all_claude_sessions': '/api/processes/kill/claude-sessions',
+    'kill_all_agent_runs': '/api/processes/kill/agent-runs',
   };
 
   const endpoint = commandToEndpoint[command];
