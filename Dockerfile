@@ -47,6 +47,7 @@ RUN apt-get update && apt-get install -y \
 COPY src-tauri/Cargo.toml ./src-tauri/Cargo.toml
 COPY src-tauri/Cargo.lock ./src-tauri/Cargo.lock
 COPY src-tauri/build.rs ./src-tauri/
+COPY src-tauri/tauri.conf.json ./src-tauri/
 COPY .cargo ./src-tauri/.cargo
 
 # Copy source code
