@@ -135,6 +135,59 @@ info:
     @echo "  just test         - Run Rust tests"
 
 # =============================================================================
+# Resilient Development Commands
+# =============================================================================
+
+# Check if opcode-web service is healthy
+check-health:
+    @dev-helpers/check-service.sh 8080
+
+# Ensure service is running (auto-start if needed)
+ensure-service:
+    @dev-helpers/ensure-service.sh 8080
+
+# Start development session with automatic service recovery
+# Usage: just dev-session [command]
+# If no command provided, starts interactive shell
+dev-service *ARGS:
+    @dev-helpers/dev-wrapper.sh 8080 {{ARGS}}
+
+# Safe restart: kill service, ensure clean state, restart
+restart:
+    @echo "🔄 Safely restarting opcode-web service..."
+    @just kill
+    @sleep 1
+    @just ensure-service
+    @echo "✅ Service restarted successfully"
+
+# Show service status and logs
+status:
+    @echo "📊 Service Status:"
+    @dev-helpers/check-service.sh 8080 && echo "✅ Service is healthy" || echo "❌ Service is down"
+    @echo ""
+    @echo "📝 Recent logs:"
+    @tail -20 /tmp/opcode-web.log 2>/dev/null || echo "No logs found"
+
+# Follow service logs
+logs:
+    @tail -f /tmp/opcode-web.log
+
+# Save current development context
+save-context:
+    @dev-helpers/save-context.sh
+
+# Load latest development context
+load-context:
+    @cat /tmp/opcode-context/context-latest.txt 2>/dev/null || echo "No saved context found"
+
+# Install git hooks for automatic context saving
+install-hooks:
+    @echo "📦 Installing git hooks..."
+    @cp dev-helpers/pre-commit-hook.sh .git/hooks/pre-commit
+    @chmod +x .git/hooks/pre-commit
+    @echo "✅ Git hooks installed (context will auto-save before commits)"
+
+# =============================================================================
 # Container/Podman commands
 # =============================================================================
 

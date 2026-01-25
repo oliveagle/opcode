@@ -118,7 +118,7 @@ export function ProcessMonitor() {
     loadProcesses();
 
     if (autoRefresh) {
-      const interval = setInterval(loadProcesses, 2000); // Refresh every 2 seconds
+      const interval = setInterval(loadProcesses, 5000); // Refresh every 5 seconds
       return () => clearInterval(interval);
     }
   }, [autoRefresh]);

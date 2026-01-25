@@ -3,7 +3,7 @@ use axum::http::Method;
 use axum::{
     extract::{Path, Query, State as AxumState, WebSocketUpgrade},
     response::{Html, Json, Response},
-    routing::{delete, get, post, MethodRouter},
+    routing::{get, post, MethodRouter},
     Router,
 };
 use chrono;
@@ -900,6 +900,158 @@ async fn list_agent_runs(
     Json(ApiResponse::success(runs))
 }
 
+/// List agent runs with metrics
+async fn list_agent_runs_with_metrics(
+    AxumState(state): AxumState<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl axum::response::IntoResponse {
+    let conn_result = get_db_connection(&state.db_path);
+    let conn = match conn_result {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    // Check if agent_id filter is provided
+    let agent_id_filter = params.get("agentId").and_then(|id| id.parse::<i64>().ok());
+
+    let runs: Vec<serde_json::Value> = if let Some(agent_id) = agent_id_filter {
+        let mut stmt = match conn.prepare(
+            "SELECT ar.id, ar.agent_id, ar.project_path, ar.status, ar.prompt, ar.output,
+                    ar.error, ar.model, ar.tokens_used, ar.cost, ar.started_at, ar.completed_at,
+                    a.name as agent_name, a.icon as agent_icon
+             FROM agent_runs ar
+             JOIN agents a ON ar.agent_id = a.id
+             WHERE ar.agent_id = ?1
+             ORDER BY ar.started_at DESC LIMIT 100"
+        ) {
+            Ok(s) => s,
+            Err(e) => return Json(ApiResponse::error(format!("Failed to prepare query: {}", e))),
+        };
+
+        let result = match stmt.query_map([&agent_id.to_string()], |row| {
+            let agent_id: i64 = row.get(1)?;
+            let project_path: String = row.get(2)?;
+            let run_id: i64 = row.get(0)?;
+
+            // Try to read metrics from JSONL file
+            let metrics = read_jsonl_metrics(run_id, &project_path);
+
+            Ok(serde_json::json!({
+                "id": run_id,
+                "agent_id": agent_id,
+                "project_path": project_path,
+                "status": row.get::<_, String>(3)?,
+                "prompt": row.get::<_, Option<String>>(4)?,
+                "output": row.get::<_, Option<String>>(5)?,
+                "error": row.get::<_, Option<String>>(6)?,
+                "model": row.get::<_, Option<String>>(7)?,
+                "tokens_used": row.get::<_, Option<i64>>(8)?,
+                "cost": row.get::<_, Option<f64>>(9)?,
+                "created_at": row.get::<_, i64>(10)?,
+                "completed_at": row.get::<_, Option<i64>>(11)?,
+                "agent_name": row.get::<_, String>(12)?,
+                "agent_icon": row.get::<_, Option<String>>(13)?,
+                "metrics": metrics,
+            }))
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => vec![],
+        };
+        result
+    } else {
+        let mut stmt = match conn.prepare(
+            "SELECT ar.id, ar.agent_id, ar.project_path, ar.status, ar.prompt, ar.output,
+                    ar.error, ar.model, ar.tokens_used, ar.cost, ar.started_at, ar.completed_at,
+                    a.name as agent_name, a.icon as agent_icon
+             FROM agent_runs ar
+             JOIN agents a ON ar.agent_id = a.id
+             ORDER BY ar.started_at DESC LIMIT 100"
+        ) {
+            Ok(s) => s,
+            Err(e) => return Json(ApiResponse::error(format!("Failed to prepare query: {}", e))),
+        };
+
+        let result = match stmt.query_map([], |row| {
+            let agent_id: i64 = row.get(1)?;
+            let project_path: String = row.get(2)?;
+            let run_id: i64 = row.get(0)?;
+
+            // Try to read metrics from JSONL file
+            let metrics = read_jsonl_metrics(run_id, &project_path);
+
+            Ok(serde_json::json!({
+                "id": run_id,
+                "agent_id": agent_id,
+                "project_path": project_path,
+                "status": row.get::<_, String>(3)?,
+                "prompt": row.get::<_, Option<String>>(4)?,
+                "output": row.get::<_, Option<String>>(5)?,
+                "error": row.get::<_, Option<String>>(6)?,
+                "model": row.get::<_, Option<String>>(7)?,
+                "tokens_used": row.get::<_, Option<i64>>(8)?,
+                "cost": row.get::<_, Option<f64>>(9)?,
+                "created_at": row.get::<_, i64>(10)?,
+                "completed_at": row.get::<_, Option<i64>>(11)?,
+                "agent_name": row.get::<_, String>(12)?,
+                "agent_icon": row.get::<_, Option<String>>(13)?,
+                "metrics": metrics,
+            }))
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => vec![],
+        };
+        result
+    };
+
+    Json(ApiResponse::success(runs))
+}
+
+/// Read metrics from JSONL file for a given run
+fn read_jsonl_metrics(run_id: i64, project_path: &str) -> Option<serde_json::Value> {
+    use std::path::PathBuf;
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let claude_dir = PathBuf::from(home).join(".claude");
+    let encoded_project = project_path.replace('/', "-");
+    let project_dir = claude_dir.join(&encoded_project);
+    let session_file = project_dir.join(format!("{}.jsonl", run_id));
+
+    if !session_file.exists() {
+        return None;
+    }
+
+    match std::fs::read_to_string(&session_file) {
+        Ok(content) => {
+            // Parse JSONL and extract metrics
+            let mut total_tokens = 0i64;
+            let mut total_cost = 0.0f64;
+            let mut message_count = 0i64;
+
+            for line in content.lines() {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if let Some(tokens) = value["usage"]["input_tokens"].as_i64() {
+                        total_tokens += tokens;
+                    }
+                    if let Some(tokens) = value["usage"]["output_tokens"].as_i64() {
+                        total_tokens += tokens;
+                    }
+                    if let Some(cost) = value["usage"]["cost"].as_f64() {
+                        total_cost += cost;
+                    }
+                    message_count += 1;
+                }
+            }
+
+            Some(serde_json::json!({
+                "total_tokens": total_tokens,
+                "total_cost": total_cost,
+                "message_count": message_count,
+            }))
+        }
+        Err(_) => None,
+    }
+}
+
 /// Router for agents CRUD operations
 fn agents_router() -> MethodRouter<AppState> {
     MethodRouter::<AppState>::new()
@@ -922,73 +1074,17 @@ fn agent_runs_router() -> MethodRouter<AppState> {
 }
 
 /// Get usage statistics from agent runs
-async fn get_usage(AxumState(state): AxumState<AppState>) -> impl axum::response::IntoResponse {
-    let conn_result = get_db_connection(&state.db_path);
-    let conn = match conn_result {
-        Ok(c) => c,
-        Err(e) => return Json(ApiResponse::error(e)),
-    };
+async fn get_usage(Query(params): Query<std::collections::HashMap<String, String>>) -> impl axum::response::IntoResponse {
+    use crate::commands::usage::get_usage_stats;
 
-    // Get summary stats
-    let total_runs: i64 = conn.query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row.get(0)).unwrap_or(0);
-    let total_cost: f64 = conn.query_row("SELECT SUM(cost) FROM agent_runs", [], |row| row.get(0)).unwrap_or(0.0);
-    let total_tokens: i64 = conn.query_row("SELECT SUM(tokens_used) FROM agent_runs", [], |row| row.get(0)).unwrap_or(0);
-    let completed_runs: i64 = conn.query_row("SELECT COUNT(*) FROM agent_runs WHERE status = 'completed'", [], |row| row.get(0)).unwrap_or(0);
-    let failed_runs: i64 = conn.query_row("SELECT COUNT(*) FROM agent_runs WHERE status = 'failed'", [], |row| row.get(0)).unwrap_or(0);
+    // Parse optional days parameter
+    let days = params.get("days").and_then(|d| d.parse::<u32>().ok());
 
-    // Get usage by model
-    let mut model_stmt = match conn.prepare(
-        "SELECT model, COUNT(*) as count, SUM(cost) as total_cost, SUM(tokens_used) as total_tokens
-         FROM agent_runs WHERE model IS NOT NULL GROUP BY model"
-    ) {
-        Ok(s) => s,
-        Err(_) => return Json(ApiResponse::error("Failed to prepare model query".to_string())),
-    };
-
-    let by_model: Vec<serde_json::Value> = match model_stmt.query_map([], |row| {
-        Ok(serde_json::json!({
-            "model": row.get::<_, Option<String>>(0)?,
-            "count": row.get::<_, i64>(1)?,
-            "cost": row.get::<_, Option<f64>>(2)?,
-            "tokens": row.get::<_, Option<i64>>(3)?,
-        }))
-    }) {
-        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-        Err(_) => vec![],
-    };
-
-    // Get usage by date (last 30 days)
-    let date_stmt_result = conn.prepare(
-        "SELECT DATE(started_at, 'unixepoch') as date, COUNT(*) as count, SUM(cost) as cost
-         FROM agent_runs WHERE started_at > strftime('%s', 'now') - 86400 * 30
-         GROUP BY DATE(started_at, 'unixepoch') ORDER BY date"
-    );
-
-    let by_date: Vec<serde_json::Value> = match date_stmt_result {
-        Ok(mut date_stmt) => match date_stmt.query_map([], |row| {
-            Ok(serde_json::json!({
-                "date": row.get::<_, Option<String>>(0)?,
-                "count": row.get::<_, i64>(1)?,
-                "cost": row.get::<_, Option<f64>>(2)?,
-            }))
-        }) {
-            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-            Err(_) => vec![],
-        },
-        Err(_) => vec![],
-    };
-
-    let usage_stats = serde_json::json!({
-        "total_runs": total_runs,
-        "total_cost": total_cost,
-        "total_tokens": total_tokens,
-        "completed_runs": completed_runs,
-        "failed_runs": failed_runs,
-        "by_model": by_model,
-        "by_date": by_date,
-    });
-
-    Json(ApiResponse::success(usage_stats))
+    // Call the Tauri command to get usage stats
+    match get_usage_stats(days) {
+        Ok(stats) => Json(ApiResponse::success(stats)),
+        Err(e) => Json(ApiResponse::error(format!("Failed to get usage stats: {}", e))),
+    }
 }
 
 /// Get user's home directory
@@ -1837,6 +1933,7 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
         .route("/api/agents", agents_router())
         .route("/api/agents/{id}", agent_router())
         .route("/api/agents/runs", agent_runs_router())
+        .route("/api/agents/runs/metrics", get(list_agent_runs_with_metrics))
         // Usage API
         .route("/api/usage", get(get_usage))
         // Storage API
@@ -1917,12 +2014,20 @@ pub async fn start_web_mode(port: Option<u16>) -> Result<(), Box<dyn std::error:
 async fn get_all_processes_web(
     AxumState(state): AxumState<AppState>,
 ) -> impl axum::response::IntoResponse {
-    let result = state.process_registry.get_running_processes();
+    // Get processes from registry (started through web server)
+    let registry_result = state.process_registry.get_running_processes();
 
-    match result {
-        Ok(processes) => {
+    // Discover system-wide Claude processes
+    let discovered_processes = crate::commands::process_monitor::discover_system_claude_processes();
+
+    match registry_result {
+        Ok(registry_processes) => {
+            // Combine both sources
+            let mut all_processes = registry_processes;
+            all_processes.extend(discovered_processes);
+
             let now = chrono::Utc::now();
-            let monitor_info: Vec<crate::commands::process_monitor::ProcessMonitorInfo> = processes
+            let monitor_info: Vec<crate::commands::process_monitor::ProcessMonitorInfo> = all_processes
                 .into_iter()
                 .map(|p| {
                     let duration = now.signed_duration_since(p.started_at);
@@ -1971,10 +2076,17 @@ async fn get_all_processes_web(
 async fn get_process_stats_web(
     AxumState(state): AxumState<AppState>,
 ) -> impl axum::response::IntoResponse {
-    let processes = state.process_registry.get_running_processes();
+    // Get processes from registry (started through web server)
+    let registry_processes = state.process_registry.get_running_processes();
 
-    match processes {
-        Ok(processes) => {
+    // Discover system-wide Claude processes
+    let discovered_processes = crate::commands::process_monitor::discover_system_claude_processes();
+
+    // Count discovered Claude sessions (agent runs are only tracked in registry)
+    let discovered_claude_sessions = discovered_processes.len();
+
+    match registry_processes {
+        Ok(registry_processes) => {
             let claude_sessions = state
                 .process_registry
                 .get_running_claude_sessions();
@@ -1985,8 +2097,8 @@ async fn get_process_stats_web(
             match (claude_sessions, agent_runs) {
                 (Ok(sessions), Ok(agents)) => {
                     let stats = crate::commands::process_monitor::ProcessMonitorStats {
-                        total_processes: processes.len(),
-                        claude_sessions: sessions.len(),
+                        total_processes: registry_processes.len() + discovered_processes.len(),
+                        claude_sessions: sessions.len() + discovered_claude_sessions,
                         agent_runs: agents.len(),
                     };
                     Json(ApiResponse::success(stats))

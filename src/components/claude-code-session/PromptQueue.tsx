@@ -31,16 +31,16 @@ export const PromptQueue: React.FC<PromptQueueProps> = React.memo(({
       exit={{ opacity: 0, height: 0 }}
       className={cn("border-t bg-muted/20", className)}
     >
-      <div className="px-4 py-3">
-        <div className="flex items-center gap-2 mb-2">
-          <Clock className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium">Queued Prompts</span>
-          <Badge variant="secondary" className="text-xs">
+      <div className="px-3 py-2">
+        <div className="flex items-center gap-2 mb-1.5">
+          <Clock className="h-3 w-3 text-muted-foreground" />
+          <span className="text-xs font-medium">Queued Prompts</span>
+          <Badge variant="secondary" className="h-4 text-xs px-1.5">
             {queuedPrompts.length}
           </Badge>
         </div>
-        
-        <div className="space-y-2 max-h-32 overflow-y-auto">
+
+        <div className="space-y-1 max-h-20 overflow-y-auto">
           <AnimatePresence mode="popLayout">
             {queuedPrompts.map((queuedPrompt, index) => (
               <motion.div
@@ -49,30 +49,27 @@ export const PromptQueue: React.FC<PromptQueueProps> = React.memo(({
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: 20 }}
                 transition={{ delay: index * 0.05 }}
-                className="flex items-start gap-2 p-2 rounded-md bg-background/50"
+                className="flex items-center gap-1.5 py-1 px-2 rounded bg-background/50"
               >
-                <div className="flex-shrink-0 mt-0.5">
+                <div className="flex-shrink-0">
                   {queuedPrompt.model === "opus" ? (
-                    <Sparkles className="h-3.5 w-3.5 text-purple-500" />
+                    <Sparkles className="h-3 w-3 text-purple-500" />
                   ) : (
-                    <Zap className="h-3.5 w-3.5 text-amber-500" />
+                    <Zap className="h-3 w-3 text-amber-500" />
                   )}
                 </div>
-                
+
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm truncate">{queuedPrompt.prompt}</p>
-                  <span className="text-xs text-muted-foreground">
-                    {queuedPrompt.model === "opus" ? "Opus" : "Sonnet"}
-                  </span>
+                  <p className="text-xs truncate">{queuedPrompt.prompt}</p>
                 </div>
-                
+
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-6 w-6 flex-shrink-0"
+                  className="h-5 w-5 flex-shrink-0 -mr-1"
                   onClick={() => onRemove(queuedPrompt.id)}
                 >
-                  <X className="h-3 w-3" />
+                  <X className="h-2.5 w-2.5" />
                 </Button>
               </motion.div>
             ))}

@@ -389,6 +389,7 @@ function mapCommandToEndpoint(command: string, _params?: any): string {
     'import_agent_from_file': '/api/agents/import/file',
     'execute_agent': '/api/agents/{agentId}/execute',
     'list_agent_runs': '/api/agents/runs',
+    'list_agent_runs_with_metrics': '/api/agents/runs/metrics',
     'get_agent_run': '/api/agents/runs/{id}',
     'get_agent_run_with_real_time_metrics': '/api/agents/runs/{id}/metrics',
     'list_running_sessions': '/api/sessions/running',

@@ -71,7 +71,7 @@ export function ProcessMonitorPopover({ onClose }: ProcessMonitorPopoverProps) {
 
   useEffect(() => {
     loadProcesses();
-    const interval = setInterval(loadProcesses, 3000); // Refresh every 3 seconds
+    const interval = setInterval(loadProcesses, 5000); // Refresh every 5 seconds
     return () => clearInterval(interval);
   }, []);
 
