@@ -1152,7 +1152,7 @@ const FloatingPromptInputInner = (
             />
           )}
 
-          <div className="p-3 md:p-3 p-2">
+          <div className="p-2 md:p-3">
             <div className="flex items-end gap-2 md:gap-2 gap-1 w-full">
               {/* Model & Thinking Mode Selectors - Left side, hidden on mobile */}
               <div className="hidden md:flex items-center gap-1 shrink-0 md:mb-1 mb-0.5">
@@ -1325,7 +1325,7 @@ const FloatingPromptInputInner = (
                   }
                   disabled={disabled}
                   className={cn(
-                    "resize-none pr-10 md:pr-20 pl-2 md:pl-3 py-2.5 transition-all duration-150",
+                    "resize-none pr-8 md:pr-20 pl-2 md:pl-3 py-2.5 transition-all duration-150",
                     "md:py-2.5 py-2", // Smaller padding on mobile
                     dragActive && "border-primary",
                     textareaHeight >= 120 && "overflow-y-auto scrollbar-thin"
@@ -1337,7 +1337,7 @@ const FloatingPromptInputInner = (
                 />
 
                 {/* Action buttons inside input - fixed at bottom right */}
-                <div className="absolute right-2 bottom-2 flex items-center gap-0.5">
+                <div className="absolute right-1.5 md:right-2 bottom-1.5 md:bottom-2 flex items-center gap-0.5">
                   <TooltipSimple content="Expand (Ctrl+Shift+E)" side="top">
                     <motion.div
                       whileTap={{ scale: 0.97 }}
