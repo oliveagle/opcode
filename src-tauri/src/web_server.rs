@@ -3,7 +3,7 @@ use axum::http::Method;
 use axum::{
     extract::{Path, Query, State as AxumState, WebSocketUpgrade},
     response::{Html, Json, Response},
-    routing::{get, MethodRouter},
+    routing::{delete, get, post, MethodRouter},
     Router,
 };
 use chrono;
@@ -93,7 +93,7 @@ pub struct QueryParams {
     pub project_path: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
@@ -1863,10 +1863,10 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
         // Process Monitor
         .route("/api/processes", get(get_all_processes_web))
         .route("/api/processes/stats", get(get_process_stats_web))
-        .route("/api/processes/kill/all", get(kill_all_processes_web))
-        .route("/api/processes/kill/claude-sessions", get(kill_all_claude_sessions_web))
-        .route("/api/processes/kill/agent-runs", get(kill_all_agent_runs_web))
-        .route("/api/processes/{runId}/kill", get(kill_process_web))
+        .route("/api/processes/kill/all", post(kill_all_processes_web).delete(kill_all_processes_web))
+        .route("/api/processes/kill/claude-sessions", post(kill_all_claude_sessions_web).delete(kill_all_claude_sessions_web))
+        .route("/api/processes/kill/agent-runs", post(kill_all_agent_runs_web).delete(kill_all_agent_runs_web))
+        .route("/api/processes/{runId}/kill", post(kill_process_web).delete(kill_process_web))
         // Session history
         .route(
             "/api/sessions/{session_id}/history/{project_id}",
@@ -2083,4 +2083,313 @@ async fn kill_all_agent_runs_web(
     }
 
     Json(ApiResponse::success(killed_count))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::body::to_bytes;
+    use axum::http::{Request, StatusCode, Method};
+    use tower::ServiceExt;
+
+    /// Helper function to create a test app state with a temporary database
+    async fn create_test_state() -> AppState {
+        // Create a temporary database for testing
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        // Initialize the test database
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+
+            // Create agents table
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS agents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    system_prompt TEXT NOT NULL,
+                    icon TEXT,
+                    model TEXT DEFAULT 'sonnet',
+                    max_tokens INTEGER DEFAULT 8192,
+                    temperature REAL DEFAULT 0.0,
+                    read_enabled INTEGER DEFAULT 1,
+                    write_enabled INTEGER DEFAULT 1,
+                    network_enabled INTEGER DEFAULT 0,
+                    created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                    updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+                )",
+                [],
+            ).unwrap();
+
+            // Create agent_runs table
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS agent_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    agent_id INTEGER NOT NULL,
+                    project_path TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'running',
+                    prompt TEXT,
+                    output TEXT,
+                    error TEXT,
+                    model TEXT,
+                    tokens_used INTEGER DEFAULT 0,
+                    cost REAL DEFAULT 0.0,
+                    started_at INTEGER DEFAULT (strftime('%s', 'now')),
+                    completed_at INTEGER,
+                    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+                )",
+                [],
+            ).unwrap();
+
+            // Create app_settings table
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )",
+                [],
+            ).unwrap();
+        }
+
+        AppState {
+            active_sessions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            db_path,
+            process_registry: Arc::new(crate::process::registry::ProcessRegistry::new()),
+        }
+    }
+
+    /// Helper function to create a test app router
+    async fn create_test_app() -> Router {
+        let state = create_test_state().await;
+
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+            .allow_headers(Any);
+
+        Router::new()
+            // Process Monitor API routes
+            .route("/api/processes", get(get_all_processes_web))
+            .route("/api/processes/stats", get(get_process_stats_web))
+            .route("/api/processes/kill/all", post(kill_all_processes_web).delete(kill_all_processes_web))
+            .route("/api/processes/kill/claude-sessions", post(kill_all_claude_sessions_web).delete(kill_all_claude_sessions_web))
+            .route("/api/processes/kill/agent-runs", post(kill_all_agent_runs_web).delete(kill_all_agent_runs_web))
+            .route("/api/processes/{runId}/kill", post(kill_process_web).delete(kill_process_web))
+            .with_state(state)
+            .layer(cors)
+    }
+
+    #[tokio::test]
+    async fn test_process_monitor_get_all_processes_empty() {
+        let app = create_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/processes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let api_response: ApiResponse<Vec<serde_json::Value>> =
+            serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        assert!(api_response.data.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_process_monitor_get_stats_empty() {
+        let app = create_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/processes/stats")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let api_response: ApiResponse<serde_json::Value> =
+            serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data["total_processes"], 0);
+        assert_eq!(data["claude_sessions"], 0);
+        assert_eq!(data["agent_runs"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_process_monitor_kill_all_processes_empty() {
+        let app = create_test_app().await;
+
+        // Test POST method
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/processes/kill/all")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let api_response: ApiResponse<usize> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        assert_eq!(api_response.data.unwrap(), 0);
+
+        // Test DELETE method (for regression prevention of 404 bug)
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri("/api/processes/kill/all")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_process_monitor_kill_all_claude_sessions_empty() {
+        let app = create_test_app().await;
+
+        // Test POST method
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/processes/kill/claude-sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let api_response: ApiResponse<usize> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        assert_eq!(api_response.data.unwrap(), 0);
+
+        // Test DELETE method (for regression prevention of 404 bug)
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri("/api/processes/kill/claude-sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_process_monitor_kill_all_agent_runs_empty() {
+        let app = create_test_app().await;
+
+        // Test POST method
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/processes/kill/agent-runs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let api_response: ApiResponse<usize> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        assert_eq!(api_response.data.unwrap(), 0);
+
+        // Test DELETE method (for regression prevention of 404 bug)
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri("/api/processes/kill/agent-runs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_process_monitor_kill_process_nonexistent() {
+        let app = create_test_app().await;
+
+        // Try to kill a process that doesn't exist (run_id: 999)
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/processes/999/kill")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let api_response: ApiResponse<bool> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        assert_eq!(api_response.data.unwrap(), false);
+
+        // Test DELETE method as well (for regression prevention)
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri("/api/processes/999/kill")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }
