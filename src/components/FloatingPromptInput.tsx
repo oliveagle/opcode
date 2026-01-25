@@ -1325,7 +1325,7 @@ const FloatingPromptInputInner = (
                   }
                   disabled={disabled}
                   className={cn(
-                    "resize-none pr-20 md:pr-20 pr-12 pl-2 md:pl-3 py-2.5 transition-all duration-150",
+                    "resize-none pr-10 md:pr-20 pl-2 md:pl-3 py-2.5 transition-all duration-150",
                     "md:py-2.5 py-2", // Smaller padding on mobile
                     dragActive && "border-primary",
                     textareaHeight >= 120 && "overflow-y-auto scrollbar-thin"
@@ -1348,7 +1348,7 @@ const FloatingPromptInputInner = (
                         size="icon"
                         onClick={() => setIsExpanded(true)}
                         disabled={disabled}
-                        className="h-8 w-8 hover:bg-accent/50 transition-colors"
+                        className="hidden md:inline-flex h-8 w-8 hover:bg-accent/50 transition-colors"
                       >
                         <Maximize2 className="h-3.5 w-3.5" />
                       </Button>
@@ -1356,6 +1356,23 @@ const FloatingPromptInputInner = (
                   </TooltipSimple>
 
                   <TooltipSimple content="Upload image" side="top">
+                    <motion.div
+                      whileTap={{ scale: 0.97 }}
+                      transition={{ duration: 0.15 }}
+                    >
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={handleFileInputClick}
+                        disabled={disabled}
+                        className="hidden md:inline-flex h-8 w-8 hover:bg-accent/50 transition-colors"
+                      >
+                        <ImageIcon className="h-3.5 w-3.5" />
+                      </Button>
+                    </motion.div>
+                  </TooltipSimple>
+
+                  <TooltipSimple content={isLoading ? "Stop generation" : "Send message (Enter)"} side="top">
                     <motion.div
                       whileTap={{ scale: 0.97 }}
                       transition={{ duration: 0.15 }}
