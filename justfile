@@ -71,7 +71,30 @@ web: build-frontend
 web-port PORT: build-frontend
     cd src-tauri && cargo run --bin opcode-web -- --port {{PORT}}
 
-# Get local IP for phone access
+# Install Tauri system dependencies (Linux)
+deps:
+    sudo apt update && sudo apt install -y \
+      libwebkit2gtk-4.1-dev \
+      libgtk-3-dev \
+      libayatana-appindicator3-dev \
+      librsvg2-dev \
+      patchelf \
+      build-essential \
+      curl \
+      wget \
+      file \
+      libssl-dev \
+      libxdo-dev \
+      libsoup-3.0-dev \
+      libjavascriptcoregtk-4.1-dev \
+      libgdk-pixbuf2.0-dev \
+      libcairo2-dev
+
+# Run frontend dev server (0.0.0.0 - for phone access)
+dev-web:
+    bun run dev
+
+# Show local IP for phone access
 ip:
     @echo "🌐 Your PC's IP addresses:"
     @ip route get 1.1.1.1 | grep -oP 'src \K\S+' || echo "Could not detect IP"
@@ -88,9 +111,11 @@ info:
     @echo "🏗️  Build System: Nix + Just"
     @echo ""
     @echo "💡 Common commands:"
-    @echo "  just run      - Build and run (desktop)"
-    @echo "  just web      - Run web server for phone access"
-    @echo "  just quick    - Quick build and run"
-    @echo "  just rebuild  - Full clean rebuild"
-    @echo "  just shell    - Enter Nix environment"
-    @echo "  just ip       - Show IP for phone access"
+    @echo "  just run       - Build and run (desktop)"
+    @echo "  just web       - Run Tauri web server for phone access"
+    @echo "  just dev-web   - Run frontend dev server (0.0.0.0:1420)"
+    @echo "  just quick     - Quick build and run"
+    @echo "  just rebuild   - Full clean rebuild"
+    @echo "  just shell     - Enter Nix environment"
+    @echo "  just deps      - Install Tauri system dependencies"
+    @echo "  just ip        - Show IP for phone access"

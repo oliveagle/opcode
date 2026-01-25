@@ -1,10 +1,12 @@
-import React, { Suspense, lazy, useEffect } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTabState } from '@/hooks/useTabState';
 import { useScreenTracking } from '@/hooks/useAnalytics';
 import { Tab } from '@/contexts/TabContext';
 import { Loader2, Plus, ArrowLeft } from 'lucide-react';
 import { api, type Project, type Session, type ClaudeMdFile } from '@/lib/api';
+import { getEnvironmentInfo } from '@/lib/apiAdapter';
+import { DirectoryBrowser } from '@/components/DirectoryBrowser';
 import { ProjectList } from '@/components/ProjectList';
 import { SessionList } from '@/components/SessionList';
 import { Button } from '@/components/ui/button';
@@ -34,6 +36,10 @@ const TabPanel: React.FC<TabPanelProps> = ({ tab, isActive }) => {
   const [selectedProject, setSelectedProject] = React.useState<Project | null>(null);
   const [sessions, setSessions] = React.useState<Session[]>([]);
   const [loading, setLoading] = React.useState(false);
+  
+  // Directory browser state
+  const [showDirBrowser, setShowDirBrowser] = useState(false);
+  const [dirBrowserPath, setDirBrowserPath] = useState('/');
   
   // Track screen when tab becomes active
   useScreenTracking(isActive ? tab.type : undefined, isActive ? tab.id : undefined);
@@ -83,27 +89,46 @@ const TabPanel: React.FC<TabPanelProps> = ({ tab, isActive }) => {
 
   const handleOpenProject = async () => {
     console.log('handleOpenProject called');
-    try {
-      // Use native dialog to pick folder
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: 'Select Project Folder',
-        defaultPath: await api.getHomeDirectory(),
-      });
-      
-      console.log('Selected folder:', selected);
-      
-      if (selected && typeof selected === 'string') {
-        // Create or open project for the selected directory
-        const project = await api.createProject(selected);
-        await loadProjects();
-        await handleProjectClick(project);
+    
+    const envInfo = getEnvironmentInfo();
+    console.log('[handleOpenProject] Environment:', envInfo);
+
+    if (envInfo.isTauri) {
+      // Use native Tauri dialog to pick folder
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog');
+        const selected = await open({
+          directory: true,
+          multiple: false,
+          title: 'Select Project Folder',
+          defaultPath: await api.getHomeDirectory(),
+        });
+        
+        if (selected && typeof selected === 'string') {
+          const project = await api.createProject(selected);
+          await loadProjects();
+          await handleProjectClick(project);
+        }
+      } catch (err) {
+        console.error('Failed to open folder picker:', err);
+        setError('Failed to open folder picker');
       }
+    } else {
+      // Web mode - show server directory browser
+      setDirBrowserPath('/');
+      setShowDirBrowser(true);
+    }
+  };
+
+  const handleDirectorySelect = async (path: string) => {
+    try {
+      console.log('Selected server directory:', path);
+      const project = await api.createProject(path);
+      await loadProjects();
+      await handleProjectClick(project);
     } catch (err) {
-      console.error('Failed to open folder picker:', err);
-      setError('Failed to open folder picker');
+      console.error('Failed to create project:', err);
+      setError('Failed to create project from selected directory');
     }
   };
   
@@ -393,6 +418,14 @@ const TabPanel: React.FC<TabPanelProps> = ({ tab, isActive }) => {
         </Suspense>
       </motion.div>
 
+      {/* Directory Browser Modal for Web Mode */}
+      <DirectoryBrowser
+        isOpen={showDirBrowser}
+        onClose={() => setShowDirBrowser(false)}
+        onSelect={handleDirectorySelect}
+        initialPath={dirBrowserPath}
+        title="Select Project Folder on Server"
+      />
     </>
   );
 };

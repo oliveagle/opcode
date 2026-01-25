@@ -1,9 +1,9 @@
 use axum::extract::ws::{Message, WebSocket};
 use axum::http::Method;
 use axum::{
-    extract::{Path, State as AxumState, WebSocketUpgrade},
+    extract::{Path, Query, State as AxumState, WebSocketUpgrade},
     response::{Html, Json, Response},
-    routing::get,
+    routing::{get, MethodRouter},
     Router,
 };
 use chrono;
@@ -13,10 +13,12 @@ use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use which;
+
+// Import storage types
+use crate::commands::storage::{TableData, TableInfo};
 
 use crate::commands;
 
@@ -63,7 +65,15 @@ fn find_claude_binary_web() -> Result<String, String> {
 pub struct AppState {
     // Track active WebSocket sessions for Claude execution
     pub active_sessions:
-        Arc<Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<String>>>>,
+        Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<String>>>>,
+    // Database path for on-demand connections
+    pub db_path: std::path::PathBuf,
+}
+
+/// Get a new database connection from the path
+fn get_db_connection(path: &std::path::PathBuf) -> Result<rusqlite::Connection, String> {
+    rusqlite::Connection::open(path)
+        .map_err(|e| format!("Failed to open database: {}", e))
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,10 +121,477 @@ async fn serve_frontend() -> Html<&'static str> {
     Html(include_str!("../../dist/index.html"))
 }
 
+/// Initialize SQLite database for web mode
+fn init_web_db() -> Result<std::path::PathBuf, String> {
+    let data_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("opcode");
+
+    // Create directory if it doesn't exist
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|e| format!("Failed to create data directory: {}", e))?;
+
+    let db_path = data_dir.join("web.db");
+    
+    // Initialize the database with tables
+    {
+        let conn = rusqlite::Connection::open(&db_path)
+            .map_err(|e| format!("Failed to open database: {}", e))?;
+
+        // Enable foreign keys
+        conn.execute("PRAGMA foreign_keys = ON", [])
+            .map_err(|e| format!("Failed to enable foreign keys: {}", e))?;
+
+        // Create agents table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                system_prompt TEXT NOT NULL,
+                icon TEXT,
+                model TEXT DEFAULT 'sonnet',
+                max_tokens INTEGER DEFAULT 8192,
+                temperature REAL DEFAULT 0.0,
+                read_enabled INTEGER DEFAULT 1,
+                write_enabled INTEGER DEFAULT 1,
+                network_enabled INTEGER DEFAULT 0,
+                created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+            )",
+            [],
+        ).map_err(|e| format!("Failed to create agents table: {}", e))?;
+
+        // Create agent_runs table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id INTEGER NOT NULL,
+                project_path TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                prompt TEXT,
+                output TEXT,
+                error TEXT,
+                model TEXT,
+                tokens_used INTEGER DEFAULT 0,
+                cost REAL DEFAULT 0.0,
+                started_at INTEGER DEFAULT (strftime('%s', 'now')),
+                completed_at INTEGER,
+                FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+            )",
+            [],
+        ).map_err(|e| format!("Failed to create agent_runs table: {}", e))?;
+
+        // Create app_settings table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )",
+            [],
+        ).map_err(|e| format!("Failed to create app_settings table: {}", e))?;
+    }
+
+    println!("[init_web_db] Database initialized at: {:?}", db_path);
+    Ok(db_path)
+}
+
+/// Storage API endpoints for web mode
+
+/// List all tables in the database
+async fn storage_list_tables(AxumState(state): AxumState<AppState>) -> impl axum::response::IntoResponse {
+    let result = list_tables_impl(&state.db_path);
+    
+    match result {
+        Ok(tables) => Json(ApiResponse::success(tables)),
+        Err(e) => Json(ApiResponse::error(e.to_string())),
+    }
+}
+
+/// List tables using fresh connection
+fn list_tables_impl(db_path: &std::path::PathBuf) -> Result<Vec<TableInfo>, String> {
+    let conn = get_db_connection(db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ).map_err(|e| e.to_string())?;
+
+    let table_names: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    let mut tables = Vec::new();
+    for table_name in table_names {
+        let count_conn = get_db_connection(db_path).map_err(|e| e.to_string())?;
+        let row_count: i64 = count_conn
+            .query_row(&format!("SELECT COUNT(*) FROM {}", table_name), [], |row| row.get(0))
+            .unwrap_or(0);
+
+        let pragma_conn = get_db_connection(db_path).map_err(|e| e.to_string())?;
+        let mut pragma_stmt = pragma_conn.prepare(&format!("PRAGMA table_info({})", table_name)).map_err(|e| e.to_string())?;
+        let columns: Vec<crate::commands::storage::ColumnInfo> = pragma_stmt
+            .query_map([], |row| {
+                Ok(crate::commands::storage::ColumnInfo {
+                    cid: row.get(0)?,
+                    name: row.get(1)?,
+                    type_name: row.get(2)?,
+                    notnull: row.get::<_, i32>(3)? != 0,
+                    dflt_value: row.get(4)?,
+                    pk: row.get::<_, i32>(5)? != 0,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        tables.push(TableInfo {
+            name: table_name,
+            row_count,
+            columns,
+        });
+    }
+
+    Ok(tables)
+}
+
+/// Read table data with pagination
+#[derive(Deserialize)]
+struct ReadTableQuery {
+    page: Option<i64>,
+    pageSize: Option<i64>,
+    searchQuery: Option<String>,
+}
+
+async fn storage_read_table(
+    Path(tableName): Path<String>,
+    Query(query): Query<ReadTableQuery>,
+    AxumState(state): AxumState<AppState>,
+) -> impl axum::response::IntoResponse {
+    let page = query.page.unwrap_or(1);
+    let page_size = query.pageSize.unwrap_or(50);
+    let search_query = query.searchQuery;
+
+    match read_table_impl(&state.db_path, &tableName, page, page_size, search_query) {
+        Ok(data) => Json(ApiResponse::success(data)),
+        Err(e) => Json(ApiResponse::error(e.to_string())),
+    }
+}
+
+fn read_table_impl(
+    db_path: &std::path::PathBuf,
+    table_name: &str,
+    page: i64,
+    page_size: i64,
+    search_query: Option<String>,
+) -> Result<TableData, String> {
+    // Get column information
+    let pragma_conn = get_db_connection(db_path).map_err(|e| e.to_string())?;
+    let mut pragma_stmt = pragma_conn.prepare(&format!("PRAGMA table_info({})", table_name)).map_err(|e| e.to_string())?;
+    let columns: Vec<crate::commands::storage::ColumnInfo> = pragma_stmt
+        .query_map([], |row| {
+            Ok(crate::commands::storage::ColumnInfo {
+                cid: row.get(0)?,
+                name: row.get(1)?,
+                type_name: row.get(2)?,
+                notnull: row.get::<_, i32>(3)? != 0,
+                dflt_value: row.get(4)?,
+                pk: row.get::<_, i32>(5)? != 0,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    // Build query with optional search
+    let (query, count_query) = if let Some(search) = &search_query {
+        let search_conditions: Vec<String> = columns
+            .iter()
+            .filter(|col| col.type_name.contains("TEXT") || col.type_name.contains("VARCHAR"))
+            .map(|col| format!("{} LIKE '%{}%'", col.name, search.replace("'", "''")))
+            .collect();
+
+        if search_conditions.is_empty() {
+            (
+                format!("SELECT * FROM {} LIMIT ? OFFSET ?", table_name),
+                format!("SELECT COUNT(*) FROM {}", table_name),
+            )
+        } else {
+            let where_clause = search_conditions.join(" OR ");
+            (
+                format!("SELECT * FROM {} WHERE {} LIMIT ? OFFSET ?", table_name, where_clause),
+                format!("SELECT COUNT(*) FROM {} WHERE {}", table_name, where_clause),
+            )
+        }
+    } else {
+        (
+            format!("SELECT * FROM {} LIMIT ? OFFSET ?", table_name),
+            format!("SELECT COUNT(*) FROM {}", table_name),
+        )
+    };
+
+    let count_conn = get_db_connection(db_path).map_err(|e| e.to_string())?;
+    let total_rows: i64 = count_conn.query_row(&count_query, [], |row| row.get(0)).unwrap_or(0);
+    let offset = (page - 1) * page_size;
+    let total_pages = (total_rows as f64 / page_size as f64).ceil() as i64;
+
+    let data_conn = get_db_connection(db_path).map_err(|e| e.to_string())?;
+    let mut data_stmt = data_conn.prepare(&query).map_err(|e| e.to_string())?;
+    let rows: Vec<serde_json::Map<String, serde_json::Value>> = data_stmt
+        .query_map(rusqlite::params![page_size, offset], |row| {
+            let mut row_map = serde_json::Map::new();
+            for (idx, col) in columns.iter().enumerate() {
+                let value = match row.get_ref(idx)? {
+                    rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+                    rusqlite::types::ValueRef::Integer(i) => serde_json::Value::Number(serde_json::Number::from(i)),
+                    rusqlite::types::ValueRef::Real(f) => {
+                        if let Some(n) = serde_json::Number::from_f64(f) {
+                            serde_json::Value::Number(n)
+                        } else {
+                            serde_json::Value::String(f.to_string())
+                        }
+                    }
+                    rusqlite::types::ValueRef::Text(s) => serde_json::Value::String(String::from_utf8_lossy(s).to_string()),
+                    rusqlite::types::ValueRef::Blob(b) => serde_json::Value::String(base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        b,
+                    )),
+                };
+                row_map.insert(col.name.clone(), value);
+            }
+            Ok(row_map)
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(TableData {
+        table_name: table_name.to_string(),
+        columns,
+        rows,
+        total_rows,
+        page,
+        page_size,
+        total_pages,
+    })
+}
+
+fn json_to_sql_value(value: &serde_json::Value) -> Box<dyn rusqlite::ToSql> {
+    match value {
+        serde_json::Value::Null => Box::new(rusqlite::types::Null),
+        serde_json::Value::Bool(b) => Box::new(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Box::new(i)
+            } else if let Some(f) = n.as_f64() {
+                Box::new(f)
+            } else {
+                Box::new(n.to_string())
+            }
+        }
+        serde_json::Value::String(s) => Box::new(s.clone()),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            Box::new(value.to_string())
+        }
+    }
+}
+
+/// Insert a new row into a table
+#[derive(Deserialize, Clone)]
+struct InsertRowRequest {
+    values: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Synchronous insert operation for storage API
+fn insert_row_impl(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+    values: std::collections::HashMap<String, serde_json::Value>,
+) -> Result<i64, String> {
+    let columns: Vec<&String> = values.keys().collect();
+    let placeholders: Vec<String> = (1..=columns.len()).map(|i| format!("?{}", i)).collect();
+    let query = format!(
+        "INSERT INTO {} ({}) VALUES ({})",
+        table_name,
+        columns.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", "),
+        placeholders.join(", ")
+    );
+
+    let params: Vec<Box<dyn rusqlite::ToSql>> = values
+        .values()
+        .map(|v| json_to_sql_value(v))
+        .collect();
+
+    conn.execute(&query, rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
+        .map_err(|e| format!("Failed to insert row: {}", e))?;
+    Ok(conn.last_insert_rowid())
+}
+
+async fn storage_insert_row(
+    Path(tableName): Path<String>,
+    AxumState(state): AxumState<AppState>,
+    Json(req): Json<InsertRowRequest>,
+) -> impl axum::response::IntoResponse {
+    let conn_result = get_db_connection(&state.db_path);
+    let conn = match conn_result {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    match insert_row_impl(&conn, &tableName, req.values) {
+        Ok(id) => Json(ApiResponse::success(id)),
+        Err(e) => Json(ApiResponse::error(e)),
+    }
+}
+
+/// Update a row in a table
+#[derive(Deserialize)]
+struct UpdateRowRequest {
+    primary_key_values: std::collections::HashMap<String, serde_json::Value>,
+    updates: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Delete a row from a table
+#[derive(Deserialize)]
+struct DeleteRowRequest {
+    primary_key_values: std::collections::HashMap<String, serde_json::Value>,
+}
+
+
+/// Synchronous update operation for storage API
+fn update_row_impl(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+    primary_key_values: std::collections::HashMap<String, serde_json::Value>,
+    updates: std::collections::HashMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    let set_clauses: Vec<String> = updates
+        .keys()
+        .enumerate()
+        .map(|(idx, key)| format!("{} = ?{}", key, idx + 1))
+        .collect();
+
+    let where_clauses: Vec<String> = primary_key_values
+        .keys()
+        .enumerate()
+        .map(|(idx, key)| format!("{} = ?{}", key, idx + updates.len() + 1))
+        .collect();
+
+    let query = format!(
+        "UPDATE {} SET {} WHERE {}",
+        table_name,
+        set_clauses.join(", "),
+        where_clauses.join(" AND ")
+    );
+
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    for value in updates.values() {
+        params.push(json_to_sql_value(value));
+    }
+    for value in primary_key_values.values() {
+        params.push(json_to_sql_value(value));
+    }
+
+    conn.execute(&query, rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
+        .map_err(|e| format!("Failed to update row: {}", e))?;
+    Ok(())
+}
+
+async fn storage_update_row(
+    Path(tableName): Path<String>,
+    AxumState(state): AxumState<AppState>,
+    Json(req): Json<UpdateRowRequest>,
+) -> impl axum::response::IntoResponse {
+    let conn_result = get_db_connection(&state.db_path);
+    let conn = match conn_result {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    match update_row_impl(&conn, &tableName, req.primary_key_values, req.updates) {
+        Ok(_) => Json(ApiResponse::success(())),
+        Err(e) => Json(ApiResponse::error(e)),
+    }
+}
+
+/// Synchronous delete operation for storage API
+fn delete_row_impl(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+    primary_key_values: std::collections::HashMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    let where_clauses: Vec<String> = primary_key_values
+        .keys()
+        .enumerate()
+        .map(|(idx, key)| format!("{} = ?{}", key, idx + 1))
+        .collect();
+
+    let query = format!(
+        "DELETE FROM {} WHERE {}",
+        table_name,
+        where_clauses.join(" AND ")
+    );
+
+    let params: Vec<Box<dyn rusqlite::ToSql>> = primary_key_values
+        .values()
+        .map(|v| json_to_sql_value(v))
+        .collect();
+
+    conn.execute(&query, rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
+        .map_err(|e| format!("Failed to delete row: {}", e))?;
+    Ok(())
+}
+
+async fn storage_delete_row(
+    Path(tableName): Path<String>,
+    AxumState(state): AxumState<AppState>,
+    Json(req): Json<DeleteRowRequest>,
+) -> impl axum::response::IntoResponse {
+    let conn_result = get_db_connection(&state.db_path);
+    let conn = match conn_result {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    match delete_row_impl(&conn, &tableName, req.primary_key_values) {
+        Ok(_) => Json(ApiResponse::success(())),
+        Err(e) => Json(ApiResponse::error(e)),
+    }
+}
+
+/// Router for storage rows CRUD operations
+fn storage_rows_router() -> MethodRouter<AppState> {
+    MethodRouter::<AppState>::new()
+        .post(storage_insert_row)
+        .put(storage_update_row)
+        .delete(storage_delete_row)
+}
+
 /// API endpoint to get projects (equivalent to Tauri command)
-async fn get_projects() -> Json<ApiResponse<Vec<commands::claude::Project>>> {
+async fn get_projects() -> impl axum::response::IntoResponse {
     match commands::claude::list_projects().await {
         Ok(projects) => Json(ApiResponse::success(projects)),
+        Err(e) => Json(ApiResponse::error(e.to_string())),
+    }
+}
+
+/// API endpoint to create a new project (equivalent to Tauri command)
+async fn create_project(
+    Json(req): Json<serde_json::Value>,
+) -> impl axum::response::IntoResponse {
+    let path = req.get("path")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Missing 'path' field".to_string());
+    
+    let path = match path {
+        Ok(p) => p,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    match commands::claude::create_project(path).await {
+        Ok(project) => Json(ApiResponse::success(project)),
         Err(e) => Json(ApiResponse::error(e.to_string())),
     }
 }
@@ -129,14 +606,502 @@ async fn get_sessions(
     }
 }
 
-/// Simple agents endpoint - return empty for now (needs DB state)
-async fn get_agents() -> Json<ApiResponse<Vec<serde_json::Value>>> {
-    Json(ApiResponse::success(vec![]))
+/// Agent request/response types
+#[derive(Deserialize, Serialize)]
+struct AgentRow {
+    id: Option<i64>,
+    name: String,
+    description: Option<String>,
+    system_prompt: String,
+    icon: Option<String>,
+    model: String,
+    max_tokens: i64,
+    temperature: f64,
+    read_enabled: i64,
+    write_enabled: i64,
+    network_enabled: i64,
+    created_at: i64,
+    updated_at: i64,
 }
 
-/// Simple usage endpoint - return empty for now
-async fn get_usage() -> Json<ApiResponse<Vec<serde_json::Value>>> {
-    Json(ApiResponse::success(vec![]))
+#[derive(Deserialize)]
+struct CreateAgentRequest {
+    name: String,
+    description: Option<String>,
+    system_prompt: String,
+    icon: Option<String>,
+    model: Option<String>,
+    max_tokens: Option<i64>,
+    temperature: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct UpdateAgentRequest {
+    name: Option<String>,
+    description: Option<String>,
+    system_prompt: Option<String>,
+    icon: Option<String>,
+    model: Option<String>,
+    max_tokens: Option<i64>,
+    temperature: Option<f64>,
+}
+
+/// List all agents
+async fn get_agents(AxumState(state): AxumState<AppState>) -> impl axum::response::IntoResponse {
+    let conn_result = get_db_connection(&state.db_path);
+    let conn = match conn_result {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    let mut stmt = match conn.prepare(
+        "SELECT id, name, description, system_prompt, icon, model, max_tokens, temperature,
+         read_enabled, write_enabled, network_enabled, created_at, updated_at
+         FROM agents ORDER BY name"
+    ) {
+        Ok(s) => s,
+        Err(e) => return Json(ApiResponse::error(format!("Failed to prepare query: {}", e))),
+    };
+
+    let agents: Vec<serde_json::Value> = match stmt.query_map([], |row| {
+        Ok(serde_json::json!({
+            "id": row.get::<_, i64>(0)?,
+            "name": row.get::<_, String>(1)?,
+            "description": row.get::<_, Option<String>>(2)?,
+            "system_prompt": row.get::<_, String>(3)?,
+            "icon": row.get::<_, Option<String>>(4)?,
+            "model": row.get::<_, String>(5)?,
+            "max_tokens": row.get::<_, i64>(6)?,
+            "temperature": row.get::<_, f64>(7)?,
+            "read_enabled": row.get::<_, i64>(8)? != 0,
+            "write_enabled": row.get::<_, i64>(9)? != 0,
+            "network_enabled": row.get::<_, i64>(10)? != 0,
+            "created_at": row.get::<_, i64>(11)?,
+            "updated_at": row.get::<_, i64>(12)?,
+        }))
+    }) {
+        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+        Err(_) => vec![],
+    };
+
+    Json(ApiResponse::success(agents))
+}
+
+/// Create a new agent
+async fn create_agent(
+    AxumState(state): AxumState<AppState>,
+    Json(req): Json<CreateAgentRequest>,
+) -> impl axum::response::IntoResponse {
+    let conn_result = get_db_connection(&state.db_path);
+    let conn = match conn_result {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    let model = req.model.unwrap_or_else(|| "sonnet".to_string());
+    let max_tokens = req.max_tokens.unwrap_or(8192);
+    let temperature = req.temperature.unwrap_or(0.0);
+
+    match conn.execute(
+        "INSERT INTO agents (name, description, system_prompt, icon, model, max_tokens, temperature)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        rusqlite::params![
+            req.name,
+            req.description,
+            req.system_prompt,
+            req.icon,
+            model,
+            max_tokens,
+            temperature,
+        ],
+    ) {
+        Ok(_) => {
+            let id = conn.last_insert_rowid();
+            Json(ApiResponse::success(serde_json::json!({ "id": id, "message": "Agent created successfully" })))
+        }
+        Err(e) => Json(ApiResponse::error(format!("Failed to create agent: {}", e))),
+    }
+}
+
+/// Update an existing agent
+async fn update_agent(
+    Path(id): Path<i64>,
+    AxumState(state): AxumState<AppState>,
+    Json(req): Json<UpdateAgentRequest>,
+) -> impl axum::response::IntoResponse {
+    let conn_result = get_db_connection(&state.db_path);
+    let conn = match conn_result {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    // Build dynamic SET clause
+    let mut set_clauses = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    if let Some(name) = &req.name {
+        set_clauses.push("name = ?");
+        params.push(Box::new(name.clone()));
+    }
+    if let Some(desc) = &req.description {
+        set_clauses.push("description = ?");
+        params.push(Box::new(desc.clone()));
+    }
+    if let Some(prompt) = &req.system_prompt {
+        set_clauses.push("system_prompt = ?");
+        params.push(Box::new(prompt.clone()));
+    }
+    if let Some(icon) = &req.icon {
+        set_clauses.push("icon = ?");
+        params.push(Box::new(icon.clone()));
+    }
+    if let Some(model) = &req.model {
+        set_clauses.push("model = ?");
+        params.push(Box::new(model.clone()));
+    }
+    if let Some(tokens) = req.max_tokens {
+        set_clauses.push("max_tokens = ?");
+        params.push(Box::new(tokens));
+    }
+    if let Some(temp) = req.temperature {
+        set_clauses.push("temperature = ?");
+        params.push(Box::new(temp));
+    }
+
+    if set_clauses.is_empty() {
+        return Json(ApiResponse::error("No fields to update".to_string()));
+    }
+
+    // Add updated_at timestamp
+    set_clauses.push("updated_at = strftime('%s', 'now')");
+    params.push(Box::new(0i64)); // placeholder, not used
+
+    // Add ID for WHERE clause
+    params.push(Box::new(id));
+
+    let query = format!(
+        "UPDATE agents SET {} WHERE id = ?",
+        set_clauses.join(", ")
+    );
+
+    match conn.execute(&query, rusqlite::params_from_iter(params.iter().map(|p| p.as_ref()))) {
+        Ok(0) => Json(ApiResponse::error("Agent not found".to_string())),
+        Ok(_) => Json(ApiResponse::success(serde_json::json!({ "message": "Agent updated successfully" }))),
+        Err(e) => Json(ApiResponse::error(format!("Failed to update agent: {}", e))),
+    }
+}
+
+/// Delete an agent
+async fn delete_agent(
+    Path(id): Path<i64>,
+    AxumState(state): AxumState<AppState>,
+) -> impl axum::response::IntoResponse {
+    let conn_result = get_db_connection(&state.db_path);
+    let conn = match conn_result {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    match conn.execute("DELETE FROM agents WHERE id = ?", [id]) {
+        Ok(0) => Json(ApiResponse::error("Agent not found".to_string())),
+        Ok(_) => Json(ApiResponse::success(serde_json::json!({ "message": "Agent deleted successfully" }))),
+        Err(e) => Json(ApiResponse::error(format!("Failed to delete agent: {}", e))),
+    }
+}
+
+/// Get a single agent by ID
+async fn get_agent(
+    Path(id): Path<i64>,
+    AxumState(state): AxumState<AppState>,
+) -> impl axum::response::IntoResponse {
+    let conn_result = get_db_connection(&state.db_path);
+    let conn = match conn_result {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    match conn.query_row(
+        "SELECT id, name, description, system_prompt, icon, model, max_tokens, temperature,
+         read_enabled, write_enabled, network_enabled, created_at, updated_at
+         FROM agents WHERE id = ?",
+        [id],
+        |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "name": row.get::<_, String>(1)?,
+                "description": row.get::<_, Option<String>>(2)?,
+                "system_prompt": row.get::<_, String>(3)?,
+                "icon": row.get::<_, Option<String>>(4)?,
+                "model": row.get::<_, String>(5)?,
+                "max_tokens": row.get::<_, i64>(6)?,
+                "temperature": row.get::<_, f64>(7)?,
+                "read_enabled": row.get::<_, i64>(8)? != 0,
+                "write_enabled": row.get::<_, i64>(9)? != 0,
+                "network_enabled": row.get::<_, i64>(10)? != 0,
+                "created_at": row.get::<_, i64>(11)?,
+                "updated_at": row.get::<_, i64>(12)?,
+            }))
+        },
+    ) {
+        Ok(agent) => Json(ApiResponse::success(agent)),
+        Err(_) => Json(ApiResponse::error("Agent not found".to_string())),
+    }
+}
+
+/// List agent runs
+async fn list_agent_runs(
+    AxumState(state): AxumState<AppState>,
+) -> impl axum::response::IntoResponse {
+    let conn_result = get_db_connection(&state.db_path);
+    let conn = match conn_result {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    let mut stmt = match conn.prepare(
+        "SELECT ar.id, ar.agent_id, ar.project_path, ar.status, ar.prompt, ar.output,
+                ar.error, ar.model, ar.tokens_used, ar.cost, ar.started_at, ar.completed_at,
+                a.name as agent_name, a.icon as agent_icon
+         FROM agent_runs ar
+         JOIN agents a ON ar.agent_id = a.id
+         ORDER BY ar.started_at DESC LIMIT 100"
+    ) {
+        Ok(s) => s,
+        Err(e) => return Json(ApiResponse::error(format!("Failed to prepare query: {}", e))),
+    };
+
+    let runs: Vec<serde_json::Value> = match stmt.query_map([], |row| {
+        Ok(serde_json::json!({
+            "id": row.get::<_, i64>(0)?,
+            "agent_id": row.get::<_, i64>(1)?,
+            "project_path": row.get::<_, String>(2)?,
+            "status": row.get::<_, String>(3)?,
+            "prompt": row.get::<_, Option<String>>(4)?,
+            "output": row.get::<_, Option<String>>(5)?,
+            "error": row.get::<_, Option<String>>(6)?,
+            "model": row.get::<_, Option<String>>(7)?,
+            "tokens_used": row.get::<_, Option<i64>>(8)?,
+            "cost": row.get::<_, Option<f64>>(9)?,
+            "created_at": row.get::<_, i64>(10)?,
+            "completed_at": row.get::<_, Option<i64>>(11)?,
+            "agent_name": row.get::<_, String>(12)?,
+            "agent_icon": row.get::<_, Option<String>>(13)?,
+        }))
+    }) {
+        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+        Err(_) => vec![],
+    };
+
+    Json(ApiResponse::success(runs))
+}
+
+/// Router for agents CRUD operations
+fn agents_router() -> MethodRouter<AppState> {
+    MethodRouter::<AppState>::new()
+        .get(get_agents)
+        .post(create_agent)
+}
+
+/// Router for single agent operations
+fn agent_router() -> MethodRouter<AppState> {
+    MethodRouter::<AppState>::new()
+        .get(get_agent)
+        .put(update_agent)
+        .delete(delete_agent)
+}
+
+/// Router for agent runs
+fn agent_runs_router() -> MethodRouter<AppState> {
+    MethodRouter::<AppState>::new()
+        .get(list_agent_runs)
+}
+
+/// Get usage statistics from agent runs
+async fn get_usage(AxumState(state): AxumState<AppState>) -> impl axum::response::IntoResponse {
+    let conn_result = get_db_connection(&state.db_path);
+    let conn = match conn_result {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::error(e)),
+    };
+
+    // Get summary stats
+    let total_runs: i64 = conn.query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row.get(0)).unwrap_or(0);
+    let total_cost: f64 = conn.query_row("SELECT SUM(cost) FROM agent_runs", [], |row| row.get(0)).unwrap_or(0.0);
+    let total_tokens: i64 = conn.query_row("SELECT SUM(tokens_used) FROM agent_runs", [], |row| row.get(0)).unwrap_or(0);
+    let completed_runs: i64 = conn.query_row("SELECT COUNT(*) FROM agent_runs WHERE status = 'completed'", [], |row| row.get(0)).unwrap_or(0);
+    let failed_runs: i64 = conn.query_row("SELECT COUNT(*) FROM agent_runs WHERE status = 'failed'", [], |row| row.get(0)).unwrap_or(0);
+
+    // Get usage by model
+    let mut model_stmt = match conn.prepare(
+        "SELECT model, COUNT(*) as count, SUM(cost) as total_cost, SUM(tokens_used) as total_tokens
+         FROM agent_runs WHERE model IS NOT NULL GROUP BY model"
+    ) {
+        Ok(s) => s,
+        Err(_) => return Json(ApiResponse::error("Failed to prepare model query".to_string())),
+    };
+
+    let by_model: Vec<serde_json::Value> = match model_stmt.query_map([], |row| {
+        Ok(serde_json::json!({
+            "model": row.get::<_, Option<String>>(0)?,
+            "count": row.get::<_, i64>(1)?,
+            "cost": row.get::<_, Option<f64>>(2)?,
+            "tokens": row.get::<_, Option<i64>>(3)?,
+        }))
+    }) {
+        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+        Err(_) => vec![],
+    };
+
+    // Get usage by date (last 30 days)
+    let date_stmt_result = conn.prepare(
+        "SELECT DATE(started_at, 'unixepoch') as date, COUNT(*) as count, SUM(cost) as cost
+         FROM agent_runs WHERE started_at > strftime('%s', 'now') - 86400 * 30
+         GROUP BY DATE(started_at, 'unixepoch') ORDER BY date"
+    );
+
+    let by_date: Vec<serde_json::Value> = match date_stmt_result {
+        Ok(mut date_stmt) => match date_stmt.query_map([], |row| {
+            Ok(serde_json::json!({
+                "date": row.get::<_, Option<String>>(0)?,
+                "count": row.get::<_, i64>(1)?,
+                "cost": row.get::<_, Option<f64>>(2)?,
+            }))
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => vec![],
+        },
+        Err(_) => vec![],
+    };
+
+    let usage_stats = serde_json::json!({
+        "total_runs": total_runs,
+        "total_cost": total_cost,
+        "total_tokens": total_tokens,
+        "completed_runs": completed_runs,
+        "failed_runs": failed_runs,
+        "by_model": by_model,
+        "by_date": by_date,
+    });
+
+    Json(ApiResponse::success(usage_stats))
+}
+
+/// Get user's home directory
+async fn get_home_directory() -> impl axum::response::IntoResponse {
+    let home = dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/".to_string());
+    Json(ApiResponse::success(home))
+}
+
+/// Browse directory contents on server
+async fn browse_directory(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl axum::response::IntoResponse {
+    let path = params.get("path").cloned().unwrap_or_else(|| "/".to_string());
+    
+    match std::fs::read_dir(&path) {
+        Ok(entries) => {
+            let mut items = Vec::new();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let is_dir = path.is_dir();
+                let name = entry.file_name().to_string_lossy().to_string();
+                items.push(serde_json::json!({
+                    "name": name,
+                    "path": path.to_string_lossy(),
+                    "isDir": is_dir,
+                }));
+            }
+            // Sort: directories first, then files, alphabetically
+            items.sort_by(|a, b| {
+                let a_dir = a["isDir"].as_bool().unwrap_or(false);
+                let b_dir = b["isDir"].as_bool().unwrap_or(false);
+                if a_dir != b_dir {
+                    return b_dir.cmp(&a_dir); // directories first
+                }
+                a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+            });
+            Json(ApiResponse::success(serde_json::json!({
+                "path": path,
+                "items": items,
+            })))
+        }
+        Err(e) => Json(ApiResponse::error(format!("Failed to read directory: {}", e))),
+    }
+}
+
+/// Get directory tree for navigation (limited depth)
+async fn get_directory_tree(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl axum::response::IntoResponse {
+    let root_path = params.get("path").cloned().unwrap_or_else(|| "/".to_string());
+    
+    fn build_tree(path: &std::path::Path, depth: usize, max_depth: usize) -> Option<serde_json::Value> {
+        if depth > max_depth {
+            return None;
+        }
+        
+        if !path.exists() || !path.is_dir() {
+            return None;
+        }
+        
+        let mut children = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let child_path = entry.path();
+                if child_path.is_dir() {
+                    if let Some(child_tree) = build_tree(&child_path, depth + 1, max_depth) {
+                        children.push(child_tree);
+                    }
+                }
+            }
+        }
+        
+        // Sort children by name
+        children.sort_by(|a, b| {
+            let a_name = a["name"].as_str().unwrap_or("");
+            let b_name = b["name"].as_str().unwrap_or("");
+            a_name.cmp(b_name)
+        });
+        
+        Some(serde_json::json!({
+            "name": path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string_lossy().to_string()),
+            "path": path.to_string_lossy(),
+            "children": children,
+        }))
+    }
+    
+    let root = std::path::Path::new(&root_path);
+    match build_tree(root, 0, 2) {
+        Some(tree) => Json(ApiResponse::success(tree)),
+        None => Json(ApiResponse::error("Invalid path".to_string())),
+    }
+}
+
+/// Check if a path is a valid project directory
+async fn validate_project_path(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl axum::response::IntoResponse {
+    let path = params.get("path").cloned().unwrap_or_default();
+    
+    if path.is_empty() {
+        return Json(ApiResponse::error("Path is required".to_string()));
+    }
+    
+    let path = std::path::Path::new(&path);
+    if !path.exists() {
+        return Json(ApiResponse::error("Path does not exist".to_string()));
+    }
+    
+    if !path.is_dir() {
+        return Json(ApiResponse::error("Path is not a directory".to_string()));
+    }
+    
+    Json(ApiResponse::success(serde_json::json!({
+        "valid": true,
+        "path": path.to_string_lossy(),
+    })))
 }
 
 /// Get Claude settings - return basic defaults for web mode
@@ -196,9 +1161,21 @@ async fn list_slash_commands() -> Json<ApiResponse<Vec<serde_json::Value>>> {
     Json(ApiResponse::success(vec![]))
 }
 
-/// MCP list servers - return empty for web mode
-async fn mcp_list() -> Json<ApiResponse<Vec<serde_json::Value>>> {
-    Json(ApiResponse::success(vec![]))
+/// List MCP servers - returns empty for now (MCP storage not implemented in web mode)
+async fn mcp_list() -> impl axum::response::IntoResponse {
+    Json(ApiResponse::success(vec![] as Vec<serde_json::Value>))
+}
+
+/// Add MCP server
+async fn mcp_add(
+    AxumState(state): AxumState<AppState>,
+    Json(req): Json<serde_json::Value>,
+) -> impl axum::response::IntoResponse {
+    // For now, just acknowledge the request
+    // Full MCP management would require a separate table
+    Json(ApiResponse::success(serde_json::json!({
+        "message": "MCP server addition not yet implemented in web mode"
+    })))
 }
 
 /// Load session history from JSONL file
@@ -374,12 +1351,12 @@ async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
                             );
 
                             // Send completion message
-                            if let Some(sender) = state_clone
+                            let sender_opt = state_clone
                                 .active_sessions
-                                .lock()
-                                .await
+                                .lock().await
                                 .get(&session_id_clone)
-                            {
+                                .cloned();
+                            if let Some(sender) = sender_opt {
                                 let completion_msg = match result {
                                     Ok(_) => json!({
                                         "type": "completion",
@@ -407,8 +1384,9 @@ async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
                             "type": "error",
                             "message": format!("Failed to parse request: {}", e)
                         });
-                        if let Some(sender_tx) = state.active_sessions.lock().await.get(&session_id)
-                        {
+                        // Clone sender before awaiting to avoid holding lock across await
+                        let sender_opt = state.active_sessions.lock().await.get(&session_id).cloned();
+                        if let Some(sender_tx) = sender_opt {
                             let _ = sender_tx.send(error_msg.to_string()).await;
                         }
                     }
@@ -748,7 +1726,10 @@ async fn send_to_session(state: &AppState, session_id: &str, message: String) {
     println!("[TRACE] Message: {}", message);
 
     let sessions = state.active_sessions.lock().await;
-    if let Some(sender) = sessions.get(session_id) {
+    let sender_opt = sessions.get(session_id).cloned();
+    drop(sessions); // Release the lock before awaiting
+    
+    if let Some(sender) = sender_opt {
         println!("[TRACE] Found session in active sessions, sending message...");
         match sender.send(message).await {
             Ok(_) => println!("[TRACE] Message sent successfully"),
@@ -759,6 +1740,7 @@ async fn send_to_session(state: &AppState, session_id: &str, message: String) {
             "[TRACE] Session {} not found in active sessions",
             session_id
         );
+        let sessions = state.active_sessions.lock().await;
         println!(
             "[TRACE] Active sessions: {:?}",
             sessions.keys().collect::<Vec<_>>()
@@ -768,8 +1750,11 @@ async fn send_to_session(state: &AppState, session_id: &str, message: String) {
 
 /// Create the web server
 pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = init_web_db()?;
+
     let state = AppState {
-        active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        active_sessions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        db_path,
     };
 
     // CORS layer to allow requests from phone browsers
@@ -784,10 +1769,25 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
         .route("/", get(serve_frontend))
         .route("/index.html", get(serve_frontend))
         // API routes (REST API equivalent of Tauri commands)
-        .route("/api/projects", get(get_projects))
+        .route("/api/home", get(get_home_directory))
+        .route("/api/browse", get(browse_directory))
+        .route("/api/browse/tree", get(get_directory_tree))
+        .route("/api/validate-path", get(validate_project_path))
+        .route("/api/projects", get(get_projects).post(create_project))
         .route("/api/projects/{project_id}/sessions", get(get_sessions))
-        .route("/api/agents", get(get_agents))
+        // Agents API
+        .route("/api/agents", agents_router())
+        .route("/api/agents/{id}", agent_router())
+        .route("/api/agents/runs", agent_runs_router())
+        // Usage API
         .route("/api/usage", get(get_usage))
+        // Storage API
+        .route("/api/storage/tables", get(storage_list_tables))
+        .route("/api/storage/tables/{tableName}", get(storage_read_table))
+        .route(
+            "/api/storage/tables/{tableName}/rows",
+            storage_rows_router(),
+        )
         // Settings and configuration
         .route("/api/settings/claude", get(get_claude_settings))
         .route("/api/settings/claude/version", get(check_claude_version))
@@ -801,7 +1801,7 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
         // Slash commands
         .route("/api/slash-commands", get(list_slash_commands))
         // MCP
-        .route("/api/mcp/servers", get(mcp_list))
+        .route("/api/mcp/servers", get(mcp_list).post(mcp_add))
         // Session history
         .route(
             "/api/sessions/{session_id}/history/{project_id}",

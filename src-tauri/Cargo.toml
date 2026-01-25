@@ -57,7 +57,7 @@ zstd = "0.13"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 walkdir = "2"
 serde_yaml = "0.9"
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 clap = { version = "4.0", features = ["derive"] }

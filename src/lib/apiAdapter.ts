@@ -24,7 +24,7 @@ let isTauriEnvironment: boolean | null = null;
 /**
  * Detect if we're running in Tauri environment
  */
-function detectEnvironment(): boolean {
+export function detectEnvironment(): boolean {
   if (isTauriEnvironment !== null) {
     return isTauriEnvironment;
   }
@@ -62,10 +62,10 @@ interface ApiResponse<T> {
 /**
  * Make a REST API call to our web server
  */
-async function restApiCall<T>(endpoint: string, params?: any): Promise<T> {
+async function restApiCall<T>(endpoint: string, params?: any, method: string = 'GET'): Promise<T> {
   // First handle path parameters in the endpoint string
   let processedEndpoint = endpoint;
-  console.log(`[REST API] Original endpoint: ${endpoint}, params:`, params);
+  console.log(`[REST API] Original endpoint: ${endpoint}, params:`, params, 'method:', method);
   
   if (params) {
     Object.keys(params).forEach(key => {
@@ -90,7 +90,7 @@ async function restApiCall<T>(endpoint: string, params?: any): Promise<T> {
   const url = new URL(processedEndpoint, window.location.origin);
   
   // Add remaining params as query parameters for GET requests (if no placeholders remain)
-  if (params && !processedEndpoint.includes('{')) {
+  if (params && !processedEndpoint.includes('{') && method === 'GET') {
     Object.keys(params).forEach(key => {
       // Only add as query param if it wasn't used as a path param
       if (!endpoint.includes(`{${key}}`) && 
@@ -104,12 +104,30 @@ async function restApiCall<T>(endpoint: string, params?: any): Promise<T> {
   }
 
   try {
-    const response = await fetch(url.toString(), {
-      method: 'GET',
+    const fetchOptions: RequestInit = {
+      method: method,
       headers: {
         'Content-Type': 'application/json',
       },
-    });
+    };
+
+    // Add body for POST/PUT requests
+    if ((method === 'POST' || method === 'PUT') && params && !processedEndpoint.includes('{')) {
+      const bodyParams = { ...params };
+      // Remove path params from body
+      Object.keys(bodyParams).forEach(key => {
+        if (endpoint.includes(`{${key}}`) || 
+            endpoint.includes(`{${key.charAt(0).toLowerCase() + key.slice(1)}}`) ||
+            endpoint.includes(`{${key.charAt(0).toUpperCase() + key.slice(1)}}`)) {
+          delete bodyParams[key];
+        }
+      });
+      if (Object.keys(bodyParams).length > 0) {
+        fetchOptions.body = JSON.stringify(bodyParams);
+      }
+    }
+
+    const response = await fetch(url.toString(), fetchOptions);
 
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -129,34 +147,210 @@ async function restApiCall<T>(endpoint: string, params?: any): Promise<T> {
 }
 
 /**
+ * Browse server directory contents
+ */
+export async function browseServerDirectory(path: string = '/'): Promise<{ path: string; items: DirItem[] }> {
+  const params = new URLSearchParams({ path });
+  const response = await fetch(`/api/browse?${params}`);
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+  const result = await response.json();
+  if (!result.success) {
+    throw new Error(result.error || 'Failed to browse directory');
+  }
+  return result.data;
+}
+
+/**
+ * Get directory tree for navigation
+ */
+export async function getServerDirectoryTree(path: string = '/'): Promise<DirItem> {
+  const params = new URLSearchParams({ path });
+  const response = await fetch(`/api/browse/tree?${params}`);
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+  const result = await response.json();
+  if (!result.success) {
+    throw new Error(result.error || 'Failed to get directory tree');
+  }
+  return result.data;
+}
+
+/**
+ * Validate project path
+ */
+export async function validateProjectPath(path: string): Promise<{ valid: boolean; path: string }> {
+  const params = new URLSearchParams({ path });
+  const response = await fetch(`/api/validate-path?${params}`);
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+  const result = await response.json();
+  if (!result.success) {
+    throw new Error(result.error || 'Failed to validate path');
+  }
+  return result.data;
+}
+
+/**
+ * Directory item type
+ */
+export interface DirItem {
+  name: string;
+  path: string;
+  isDir: boolean;
+  children?: DirItem[];
+}
+
+/**
+ * Web mode folder picker using server-side directory browser
+ */
+export async function selectDirectoryWeb(): Promise<string | null> {
+  // This function is deprecated - use browseServerDirectory with UI instead
+  // For now, fall back to home directory
+  try {
+    const home = await apiCall<string>('get_home_directory');
+    return home;
+  } catch {
+    return '/home';
+  }
+}
+
+/**
+ * Get environment info for debugging
+ */
+export function getEnvironmentInfo() {
+  return {
+    isTauri: detectEnvironment(),
+    userAgent: navigator.userAgent,
+    location: window.location.href,
+  };
+}
+
+/**
+ * Handle streaming commands via WebSocket in web mode
+ */
+async function handleStreamingCommand<T>(command: string, params?: any): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws/claude`;
+    console.log(`[TRACE] handleStreamingCommand: ${command}, WebSocket URL: ${wsUrl}`);
+    
+    const ws = new WebSocket(wsUrl);
+    
+    ws.onopen = () => {
+      console.log(`[TRACE] WebSocket opened successfully`);
+      
+      const request = {
+        command_type: command.replace('_claude_code', ''),
+        project_path: params?.projectPath || '',
+        prompt: params?.prompt || '',
+        model: params?.model || 'claude-3-5-sonnet-20241022',
+        session_id: params?.sessionId,
+      };
+      
+      console.log(`[TRACE] Sending WebSocket request:`, request);
+      ws.send(JSON.stringify(request));
+    };
+    
+    ws.onmessage = (event) => {
+      console.log(`[TRACE] WebSocket message:`, event.data);
+      try {
+        const message = JSON.parse(event.data);
+        
+        if (message.type === 'output') {
+          try {
+            const claudeMessage = typeof message.content === 'string' 
+              ? JSON.parse(message.content) 
+              : message.content;
+            const customEvent = new CustomEvent('claude-output', {
+              detail: claudeMessage
+            });
+            window.dispatchEvent(customEvent);
+          } catch (e) {
+            console.error('[TRACE] Failed to parse Claude output:', e);
+          }
+        } else if (message.type === 'completion') {
+          const completeEvent = new CustomEvent('claude-complete', {
+            detail: message.status === 'success'
+          });
+          window.dispatchEvent(completeEvent);
+          ws.close();
+          if (message.status === 'success') {
+            resolve({} as T);
+          } else {
+            reject(new Error(message.error || 'Execution failed'));
+          }
+        } else if (message.type === 'error') {
+          const errorEvent = new CustomEvent('claude-error', {
+            detail: message.message || 'Unknown error'
+          });
+          window.dispatchEvent(errorEvent);
+          reject(new Error(message.message || 'Unknown error'));
+        }
+      } catch (e) {
+        console.error('[TRACE] Failed to parse WebSocket message:', e);
+      }
+    };
+    
+    ws.onerror = (error) => {
+      console.error('[TRACE] WebSocket error:', error);
+      const errorEvent = new CustomEvent('claude-error', {
+        detail: 'WebSocket connection failed'
+      });
+      window.dispatchEvent(errorEvent);
+      reject(new Error('WebSocket connection failed'));
+    };
+    
+    ws.onclose = (event) => {
+      if (event.code !== 1000 && event.code !== 1001) {
+        const cancelEvent = new CustomEvent('claude-complete', {
+          detail: false
+        });
+        window.dispatchEvent(cancelEvent);
+      }
+    };
+  });
+}
+
+/**
  * Unified API adapter that works in both Tauri and web environments
  */
 export async function apiCall<T>(command: string, params?: any): Promise<T> {
   const isWeb = !detectEnvironment();
   
   if (!isWeb) {
-    // Tauri environment - try invoke
     console.log(`[Tauri] Calling: ${command}`, params);
     try {
       return await invoke<T>(command, params);
     } catch (error) {
       console.warn(`[Tauri] invoke failed, falling back to web mode:`, error);
-      // Fall through to web mode
     }
   }
   
-  // Web environment - use REST API
   console.log(`[Web] Calling: ${command}`, params);
   
-  // Special handling for commands that use streaming/events
+  // Special handling for streaming commands
   const streamingCommands = ['execute_claude_code', 'continue_claude_code', 'resume_claude_code'];
   if (streamingCommands.includes(command)) {
     return handleStreamingCommand<T>(command, params);
   }
   
+  // Determine HTTP method based on command
+  let method = 'GET';
+  if (command.startsWith('create_') || command.startsWith('add_') || command === 'import_agent' || command === 'import_agent_from_github' || command === 'import_agent_from_file') {
+    method = 'POST';
+  } else if (command.startsWith('update_') || command.startsWith('save_') || command.startsWith('set_')) {
+    method = 'PUT';
+  } else if (command.startsWith('delete_') || command.startsWith('remove_')) {
+    method = 'DELETE';
+  }
+  
   // Map Tauri commands to REST endpoints
   const endpoint = mapCommandToEndpoint(command, params);
-  return await restApiCall<T>(endpoint, params);
+  return await restApiCall<T>(endpoint, params, method);
 }
 
 /**
@@ -164,7 +358,11 @@ export async function apiCall<T>(command: string, params?: any): Promise<T> {
  */
 function mapCommandToEndpoint(command: string, _params?: any): string {
   const commandToEndpoint: Record<string, string> = {
-    // Project and session commands
+    'get_home_directory': '/api/home',
+    'browse_directory': '/api/browse',
+    'get_directory_tree': '/api/browse/tree',
+    'validate_project_path': '/api/validate-path',
+    'create_project': '/api/projects',
     'list_projects': '/api/projects',
     'get_project_sessions': '/api/projects/{projectId}/sessions',
     
@@ -241,8 +439,8 @@ function mapCommandToEndpoint(command: string, _params?: any): string {
     // Storage commands
     'storage_list_tables': '/api/storage/tables',
     'storage_read_table': '/api/storage/tables/{tableName}',
-    'storage_update_row': '/api/storage/tables/{tableName}/rows/{id}',
-    'storage_delete_row': '/api/storage/tables/{tableName}/rows/{id}',
+    'storage_update_row': '/api/storage/tables/{tableName}/rows',
+    'storage_delete_row': '/api/storage/tables/{tableName}/rows',
     'storage_insert_row': '/api/storage/tables/{tableName}/rows',
     'storage_execute_sql': '/api/storage/sql',
     'storage_reset_database': '/api/storage/reset',
@@ -269,159 +467,15 @@ function mapCommandToEndpoint(command: string, _params?: any): string {
 }
 
 /**
- * Get environment info for debugging
- */
-export function getEnvironmentInfo() {
-  return {
-    isTauri: detectEnvironment(),
-    userAgent: navigator.userAgent,
-    location: window.location.href,
-  };
-}
-
-/**
- * Handle streaming commands via WebSocket in web mode
- */
-async function handleStreamingCommand<T>(command: string, params?: any): Promise<T> {
-  return new Promise((resolve, reject) => {
-    // Use wss:// for HTTPS connections (e.g., ngrok), ws:// for HTTP (localhost)
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/ws/claude`;
-    console.log(`[TRACE] handleStreamingCommand called:`);
-    console.log(`[TRACE]   command: ${command}`);
-    console.log(`[TRACE]   params:`, params);
-    console.log(`[TRACE]   WebSocket URL: ${wsUrl}`);
-    
-    const ws = new WebSocket(wsUrl);
-    
-    ws.onopen = () => {
-      console.log(`[TRACE] WebSocket opened successfully`);
-      
-      // Send execution request
-      const request = {
-        command_type: command.replace('_claude_code', ''), // execute, continue, resume
-        project_path: params?.projectPath || '',
-        prompt: params?.prompt || '',
-        model: params?.model || 'claude-3-5-sonnet-20241022',
-        session_id: params?.sessionId,
-      };
-      
-      console.log(`[TRACE] Sending WebSocket request:`, request);
-      console.log(`[TRACE] Request JSON:`, JSON.stringify(request));
-      
-      ws.send(JSON.stringify(request));
-      console.log(`[TRACE] WebSocket request sent`);
-    };
-    
-    ws.onmessage = (event) => {
-      console.log(`[TRACE] WebSocket message received:`, event.data);
-      try {
-        const message = JSON.parse(event.data);
-        console.log(`[TRACE] Parsed WebSocket message:`, message);
-        
-        if (message.type === 'start') {
-          console.log(`[TRACE] Start message: ${message.message}`);
-        } else if (message.type === 'output') {
-          console.log(`[TRACE] Output message, content length: ${message.content?.length || 0}`);
-          console.log(`[TRACE] Raw content:`, message.content);
-          
-          // The backend sends Claude output as a JSON string in the content field
-          // We need to parse this to get the actual Claude message
-          try {
-            const claudeMessage = typeof message.content === 'string' 
-              ? JSON.parse(message.content) 
-              : message.content;
-            console.log(`[TRACE] Parsed Claude message:`, claudeMessage);
-            
-            // Simulate Tauri event for compatibility with existing UI
-            const customEvent = new CustomEvent('claude-output', {
-              detail: claudeMessage
-            });
-            console.log(`[TRACE] Dispatching claude-output event:`, customEvent.detail);
-            console.log(`[TRACE] Event type:`, customEvent.type);
-            window.dispatchEvent(customEvent);
-          } catch (e) {
-            console.error(`[TRACE] Failed to parse Claude output content:`, e);
-            console.error(`[TRACE] Content that failed to parse:`, message.content);
-          }
-        } else if (message.type === 'completion') {
-          console.log(`[TRACE] Completion message:`, message);
-          
-          // Dispatch claude-complete event for UI state management
-          const completeEvent = new CustomEvent('claude-complete', {
-            detail: message.status === 'success'
-          });
-          console.log(`[TRACE] Dispatching claude-complete event:`, completeEvent.detail);
-          window.dispatchEvent(completeEvent);
-          
-          ws.close();
-          if (message.status === 'success') {
-            console.log(`[TRACE] Resolving promise with success`);
-            resolve({} as T); // Return empty object for now
-          } else {
-            console.log(`[TRACE] Rejecting promise with error: ${message.error}`);
-            reject(new Error(message.error || 'Execution failed'));
-          }
-        } else if (message.type === 'error') {
-          console.log(`[TRACE] Error message:`, message);
-          
-          // Dispatch claude-error event for UI error handling
-          const errorEvent = new CustomEvent('claude-error', {
-            detail: message.message || 'Unknown error'
-          });
-          console.log(`[TRACE] Dispatching claude-error event:`, errorEvent.detail);
-          window.dispatchEvent(errorEvent);
-          
-          reject(new Error(message.message || 'Unknown error'));
-        } else {
-          console.log(`[TRACE] Unknown message type: ${message.type}`);
-        }
-      } catch (e) {
-        console.error('[TRACE] Failed to parse WebSocket message:', e);
-        console.error('[TRACE] Raw message:', event.data);
-      }
-    };
-    
-    ws.onerror = (error) => {
-      console.error('[TRACE] WebSocket error:', error);
-      
-      // Dispatch claude-error event for connection errors
-      const errorEvent = new CustomEvent('claude-error', {
-        detail: 'WebSocket connection failed'
-      });
-      console.log(`[TRACE] Dispatching claude-error event for WebSocket error`);
-      window.dispatchEvent(errorEvent);
-      
-      reject(new Error('WebSocket connection failed'));
-    };
-    
-    ws.onclose = (event) => {
-      console.log(`[TRACE] WebSocket closed - code: ${event.code}, reason: ${event.reason}`);
-      
-      // If connection closed unexpectedly (not a normal close), dispatch cancelled event
-      if (event.code !== 1000 && event.code !== 1001) {
-        const cancelEvent = new CustomEvent('claude-complete', {
-          detail: false // false indicates cancellation/failure
-        });
-        console.log(`[TRACE] Dispatching claude-complete event for unexpected close`);
-        window.dispatchEvent(cancelEvent);
-      }
-    };
-  });
-}
-
-/**
  * Initialize web mode compatibility
  * Sets up mocks for Tauri APIs when running in web mode
  */
 export function initializeWebMode() {
   if (!detectEnvironment()) {
-    // Mock Tauri event system for web mode
     if (!window.__TAURI__) {
       window.__TAURI__ = {
         event: {
           listen: (eventName: string, callback: (event: any) => void) => {
-            // Listen for custom events that simulate Tauri events
             const handler = (e: any) => callback({ payload: e.detail });
             window.addEventListener(`${eventName}`, handler);
             return Promise.resolve(() => {
@@ -431,7 +485,6 @@ export function initializeWebMode() {
           emit: () => Promise.resolve(),
         },
         invoke: () => Promise.reject(new Error('Tauri invoke not available in web mode')),
-        // Mock the core module that includes transformCallback
         core: {
           invoke: () => Promise.reject(new Error('Tauri invoke not available in web mode')),
           transformCallback: () => {
