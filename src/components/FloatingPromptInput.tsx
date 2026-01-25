@@ -1153,9 +1153,9 @@ const FloatingPromptInputInner = (
           )}
 
           <div className="p-3 md:p-3 p-2">
-            <div className="flex items-end gap-2 md:gap-2 gap-1">
-              {/* Model & Thinking Mode Selectors - Left side, fixed at bottom */}
-              <div className="flex items-center gap-1 shrink-0 md:mb-1 mb-0.5">
+            <div className="flex items-end gap-2 md:gap-2 gap-1 w-full">
+              {/* Model & Thinking Mode Selectors - Left side, hidden on mobile */}
+              <div className="hidden md:flex items-center gap-1 shrink-0 md:mb-1 mb-0.5">
                 <Popover
                   trigger={
                     <Tooltip>
@@ -1325,7 +1325,7 @@ const FloatingPromptInputInner = (
                   }
                   disabled={disabled}
                   className={cn(
-                    "resize-none pr-20 pl-3 py-2.5 transition-all duration-150",
+                    "resize-none pr-20 md:pr-20 pr-12 pl-2 md:pl-3 py-2.5 transition-all duration-150",
                     "md:py-2.5 py-2", // Smaller padding on mobile
                     dragActive && "border-primary",
                     textareaHeight >= 120 && "overflow-y-auto scrollbar-thin"
