@@ -1172,10 +1172,10 @@ const FloatingPromptInputInner = (
             />
           )}
 
-          <div className="p-2 md:p-3">
-            <div className="flex items-end gap-2 md:gap-2 gap-1 w-full">
+          <div className="p-2 lg:p-3">
+            <div className="flex items-end gap-2 lg:gap-2 gap-1 w-full">
               {/* Model & Thinking Mode Selectors - Left side, hidden on mobile */}
-              <div className="hidden md:flex items-center gap-1 shrink-0 md:mb-1 mb-0.5">
+              <div className="hidden lg:flex items-center gap-1 shrink-0 lg:mb-1 mb-0.5">
                 <Popover
                   trigger={
                     <Tooltip>
@@ -1188,7 +1188,7 @@ const FloatingPromptInputInner = (
                               variant="ghost"
                               size="sm"
                               disabled={disabled}
-                              className="h-9 md:h-9 md:px-2 px-1.5 hover:bg-accent/50 gap-1"
+                              className="h-9 lg:h-9 lg:px-2 px-1.5 hover:bg-accent/50 gap-1"
                             >
                               <span className={selectedModelData.color}>
                                 {selectedModelData.icon}
@@ -1254,7 +1254,7 @@ const FloatingPromptInputInner = (
                               variant="ghost"
                               size="sm"
                               disabled={disabled}
-                              className="h-9 md:h-9 md:px-2 px-1.5 hover:bg-accent/50 gap-1"
+                              className="h-9 lg:h-9 lg:px-2 px-1.5 hover:bg-accent/50 gap-1"
                             >
                               <span className={THINKING_MODES.find(m => m.id === selectedThinkingMode)?.color}>
                                 {THINKING_MODES.find(m => m.id === selectedThinkingMode)?.icon}
@@ -1321,14 +1321,14 @@ const FloatingPromptInputInner = (
                   className={cn(
                     "absolute -top-1 left-1/2 transform -translate-x-1/2 z-10 cursor-ns-resize",
                     "flex items-center justify-center",
-                    "md:opacity-0 hover:md:opacity-100 transition-opacity",
-                    "md:hover:bg-muted/50",
+                    "lg:opacity-0 hover:lg:opacity-100 transition-opacity",
+                    "lg:hover:bg-muted/50",
                     isResizing && "opacity-100",
                     (isKeyboardVisible) && "hidden"
                   )}
                   style={{ width: '48px', height: '12px' }}
                 >
-                  <div className="w-10 h-1 bg-muted-foreground/40 rounded-full md:bg-muted-foreground/20" />
+                  <div className="w-10 h-1 bg-muted-foreground/40 rounded-full lg:bg-muted-foreground/20" />
                 </div>
 
                 <Textarea
@@ -1346,8 +1346,8 @@ const FloatingPromptInputInner = (
                   }
                   disabled={disabled}
                   className={cn(
-                    "resize-none pr-10 md:pr-20 pl-2 md:pl-3 py-2.5 transition-all duration-150",
-                    "md:py-2.5 py-2", // Smaller padding on mobile
+                    "resize-none pr-10 lg:pr-20 pl-2 lg:pl-3 py-2.5 transition-all duration-150",
+                    "lg:py-2.5 py-2", // Smaller padding on mobile
                     isKeyboardVisible && "py-1.5", // Even smaller when keyboard is visible
                     dragActive && "border-primary",
                     textareaHeight >= 120 && "overflow-y-auto scrollbar-thin"
@@ -1359,7 +1359,7 @@ const FloatingPromptInputInner = (
                 />
 
                 {/* Action buttons inside input - fixed at bottom right */}
-                <div className="absolute right-1.5 md:right-2 bottom-1.5 md:bottom-2 flex items-center gap-0.5">
+                <div className="absolute right-1.5 lg:right-2 bottom-1.5 lg:bottom-2 flex items-center gap-0.5">
                   {/* Mobile menu - only shows on small screens */}
                   <Popover
                     open={showMobileMenu}
@@ -1369,7 +1369,7 @@ const FloatingPromptInputInner = (
                         variant="ghost"
                         size="icon"
                         disabled={disabled}
-                        className="md:hidden h-8 w-8 hover:bg-accent/50 transition-colors"
+                        className="lg:hidden h-8 w-8 hover:bg-accent/50 transition-colors"
                       >
                         <MoreVertical className="h-4 w-4" />
                       </Button>
@@ -1416,7 +1416,7 @@ const FloatingPromptInputInner = (
                         size="icon"
                         onClick={() => setIsExpanded(true)}
                         disabled={disabled}
-                        className="hidden md:inline-flex h-8 w-8 hover:bg-accent/50 transition-colors"
+                        className="hidden lg:inline-flex h-8 w-8 hover:bg-accent/50 transition-colors"
                       >
                         <Maximize2 className="h-3.5 w-3.5" />
                       </Button>
@@ -1433,7 +1433,7 @@ const FloatingPromptInputInner = (
                         size="icon"
                         onClick={handleFileInputClick}
                         disabled={disabled}
-                        className="hidden md:inline-flex h-8 w-8 hover:bg-accent/50 transition-colors"
+                        className="hidden lg:inline-flex h-8 w-8 hover:bg-accent/50 transition-colors"
                       >
                         <ImageIcon className="h-3.5 w-3.5" />
                       </Button>
