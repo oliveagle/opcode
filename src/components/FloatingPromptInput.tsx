@@ -13,6 +13,7 @@ import {
   Cpu,
   Rocket,
   Image as ImageIcon,
+  MoreVertical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -225,6 +226,7 @@ const FloatingPromptInputInner = (
   const [embeddedImages, setEmbeddedImages] = useState<string[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const expandedTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1325,7 +1327,7 @@ const FloatingPromptInputInner = (
                   }
                   disabled={disabled}
                   className={cn(
-                    "resize-none pr-8 md:pr-20 pl-2 md:pl-3 py-2.5 transition-all duration-150",
+                    "resize-none pr-10 md:pr-20 pl-2 md:pl-3 py-2.5 transition-all duration-150",
                     "md:py-2.5 py-2", // Smaller padding on mobile
                     dragActive && "border-primary",
                     textareaHeight >= 120 && "overflow-y-auto scrollbar-thin"
@@ -1338,6 +1340,52 @@ const FloatingPromptInputInner = (
 
                 {/* Action buttons inside input - fixed at bottom right */}
                 <div className="absolute right-1.5 md:right-2 bottom-1.5 md:bottom-2 flex items-center gap-0.5">
+                  {/* Mobile menu - only shows on small screens */}
+                  <Popover
+                    open={showMobileMenu}
+                    onOpenChange={setShowMobileMenu}
+                    trigger={
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={disabled}
+                        className="md:hidden h-8 w-8 hover:bg-accent/50 transition-colors"
+                      >
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    }
+                    content={
+                      <div className="flex flex-col gap-0.5 p-1 min-w-[140px]">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setShowMobileMenu(false);
+                            setIsExpanded(true);
+                          }}
+                          className="justify-start h-8 px-3"
+                        >
+                          <Maximize2 className="h-3.5 w-3.5 mr-2" />
+                          Expand
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setShowMobileMenu(false);
+                            fileInputRef.current?.click();
+                          }}
+                          className="justify-start h-8 px-3"
+                        >
+                          <ImageIcon className="h-3.5 w-3.5 mr-2" />
+                          Upload Image
+                        </Button>
+                      </div>
+                    }
+                    align="end"
+                    side="top"
+                  />
+
                   <TooltipSimple content="Expand (Ctrl+Shift+E)" side="top">
                     <motion.div
                       whileTap={{ scale: 0.97 }}
