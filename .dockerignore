@@ -45,8 +45,8 @@ result
 
 # Lock files (will be generated in container)
 package-lock.json
-bun.lock
-Cargo.lock
+# bun.lock - needed for Bun package manager
+# Cargo.lock - needed for Rust builds
 
 # CI/CD
 .gitlab-ci.yml
