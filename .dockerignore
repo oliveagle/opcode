@@ -53,4 +53,4 @@ Cargo.lock
 .travis.yml
 
 # Misc
-.cargo
+# .cargo is needed for Rust build configuration
