@@ -1,0 +1,56 @@
+# Git
+.git
+.gitignore
+.github
+
+# Dependencies
+node_modules
+target
+dist
+
+# Build artifacts
+*.deb
+*.AppImage
+*.dmg
+*.msi
+*.exe
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Nix
+shell.nix
+result
+.direnv
+
+# Documentation
+*.md
+!README.md
+
+# Lock files (will be generated in container)
+package-lock.json
+bun.lock
+Cargo.lock
+
+# CI/CD
+.gitlab-ci.yml
+.travis.yml
+
+# Misc
+.cargo

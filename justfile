@@ -119,3 +119,79 @@ info:
     @echo "  just shell     - Enter Nix environment"
     @echo "  just deps      - Install Tauri system dependencies"
     @echo "  just ip        - Show IP for phone access"
+
+# =============================================================================
+# Container/Podman commands
+# =============================================================================
+
+# Build container image with podman
+podman-build:
+    podman build -t opcode:latest .
+
+# Build container image with custom tag
+podman-build-tag TAG:
+    podman build -t opcode:{{TAG}} .
+
+# Build container image with podman (no cache)
+podman-build-no-cache:
+    podman build --no-cache -t opcode:latest .
+
+# Run container (web server mode)
+podman-run:
+    podman run -it --rm -p 8080:8080 opcode:latest
+
+# Run container with custom port
+podman-run-port PORT:
+    podman run -it --rm -p {{PORT}}:8080 opcode:latest
+
+# Run container with volume mount
+podman-run-volume VOLUME:
+    podman run -it --rm -p 8080:8080 -v {{VOLUME}}:/data opcode:latest
+
+# Run container in background
+podman-run-bg:
+    podman run -d --name opcode -p 8080:8080 opcode:latest
+
+# Stop running container
+podman-stop:
+    podman stop opcode || true
+    podman rm opcode || true
+
+# View container logs
+podman-logs:
+    podman logs -f opcode
+
+# Execute shell in running container
+podman-shell:
+    podman exec -it opcode /bin/bash
+
+# Remove built image
+podman-clean:
+    podman rmi opcode:latest || true
+
+# Build and run in one command
+podman-up: podman-build podman-run-bg
+    @echo "✅ Container started! Access it at http://localhost:8080"
+    @echo "View logs with: just podman-logs"
+    @echo "Stop with: just podman-stop"
+
+# Show podman commands
+podman-info:
+    @echo "🐳 Podman Container Commands"
+    @echo ""
+    @echo "Building:"
+    @echo "  just podman-build           - Build container image"
+    @echo "  just podman-build-tag TAG   - Build with custom tag"
+    @echo "  just podman-build-no-cache  - Build without cache"
+    @echo ""
+    @echo "Running:"
+    @echo "  just podman-run             - Run interactively"
+    @echo "  just podman-run-port PORT   - Run on custom port"
+    @echo "  just podman-run-volume PATH - Run with volume mount"
+    @echo "  just podman-up              - Build and run in background"
+    @echo ""
+    @echo "Management:"
+    @echo "  just podman-stop            - Stop and remove container"
+    @echo "  just podman-logs            - View container logs"
+    @echo "  just podman-shell           - Execute shell in container"
+    @echo "  just podman-clean           - Remove built image"
