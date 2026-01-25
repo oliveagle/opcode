@@ -1446,23 +1446,6 @@ const FloatingPromptInputInner = (
                       transition={{ duration: 0.15 }}
                     >
                       <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={handleFileInputClick}
-                        disabled={disabled}
-                        className="h-8 w-8 hover:bg-accent/50 transition-colors"
-                      >
-                        <ImageIcon className="h-3.5 w-3.5" />
-                      </Button>
-                    </motion.div>
-                  </TooltipSimple>
-
-                  <TooltipSimple content={isLoading ? "Stop generation" : "Send message (Enter)"} side="top">
-                    <motion.div
-                      whileTap={{ scale: 0.97 }}
-                      transition={{ duration: 0.15 }}
-                    >
-                      <Button
                         onClick={isLoading ? onCancel : handleSend}
                         disabled={isLoading ? false : (!prompt.trim() || disabled)}
                         variant={isLoading ? "destructive" : prompt.trim() ? "default" : "ghost"}
