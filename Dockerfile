@@ -1,22 +1,22 @@
 # Multi-stage build for Opcode (Tauri + Rust application)
 
 # Stage 1: Build frontend
-FROM node:20-bullseye AS frontend-builder
+FROM oven/bun:1 AS frontend-builder
 
 WORKDIR /build
 
 # Copy package files
-COPY package*.json ./
+COPY package.json bun.lockb ./
 COPY tsconfig*.json ./
 COPY vite.config.ts ./
 COPY index.html ./
 
 # Install dependencies
-RUN npm ci
+RUN bun install --frozen-lockfile
 
 # Copy source and build
 COPY src ./src
-RUN npm run build
+RUN bun run build
 
 # Stage 2: Build Rust backend
 FROM rust:1.83-bookworm AS backend-builder
