@@ -223,7 +223,7 @@ const FloatingPromptInputInner = (
   const [showSlashCommandPicker, setShowSlashCommandPicker] = useState(false);
   const [slashCommandQuery, setSlashCommandQuery] = useState("");
   const [cursorPosition, setCursorPosition] = useState(0);
-  const [embeddedImages, setEmbeddedImages] = useState<string[]>([]);
+  const [embeddedImages, setEmbeddedImages] = useState<Array<{ id: string; data: string }>>([]);
   const [dragActive, setDragActive] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
@@ -237,6 +237,7 @@ const FloatingPromptInputInner = (
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [textareaHeight, setTextareaHeight] = useState<number>(48);
   const isIMEComposingRef = useRef(false);
+  const imageCounterRef = useRef(0);
 
   // Detect mobile keyboard visibility
   useEffect(() => {
@@ -295,53 +296,52 @@ const FloatingPromptInputInner = (
     return ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp'].includes(ext || '');
   };
 
-  // Extract image paths from prompt text
+  // Extract image paths from prompt text (for file paths only, not embedded images)
   const extractImagePaths = (text: string): string[] => {
     console.log('[extractImagePaths] Input text length:', text.length);
-    
+
+    // Remove embedded image placeholders @[image-xxx] from text to avoid interference
+    const placeholderRegex = /@\[image-([^\]]+)\]/g;
+    let textWithoutPlaceholders = text.replace(placeholderRegex, '');
+
     // Updated regex to handle both quoted and unquoted paths
-    // Pattern 1: @"path with spaces or data URLs" - quoted paths
+    // Pattern 1: @"path with spaces" - quoted paths
     // Pattern 2: @path - unquoted paths (continues until @ or end)
     const quotedRegex = /@"([^"]+)"/g;
     const unquotedRegex = /@([^@\n\s]+)/g;
-    
+
     const pathsSet = new Set<string>(); // Use Set to ensure uniqueness
-    
-    // First, extract quoted paths (including data URLs)
-    let matches = Array.from(text.matchAll(quotedRegex));
+
+    // First, extract quoted paths
+    let matches = Array.from(textWithoutPlaceholders.matchAll(quotedRegex));
     console.log('[extractImagePaths] Quoted matches:', matches.length);
-    
+
     for (const match of matches) {
       const path = match[1]; // No need to trim, quotes preserve exact path
-      console.log('[extractImagePaths] Processing quoted path:', path.startsWith('data:') ? 'data URL' : path);
-      
-      // For data URLs, use as-is; for file paths, convert to absolute
-      const fullPath = path.startsWith('data:') 
-        ? path 
-        : (path.startsWith('/') ? path : (projectPath ? `${projectPath}/${path}` : path));
-      
+      console.log('[extractImagePaths] Processing quoted path:', path);
+
+      // Convert relative path to absolute if needed
+      const fullPath = path.startsWith('/') ? path : (projectPath ? `${projectPath}/${path}` : path);
+
       if (isImageFile(fullPath)) {
         pathsSet.add(fullPath);
       }
     }
-    
+
     // Remove quoted mentions from text to avoid double-matching
-    let textWithoutQuoted = text.replace(quotedRegex, '');
-    
+    let textWithoutQuoted = textWithoutPlaceholders.replace(quotedRegex, '');
+
     // Then extract unquoted paths (typically file paths)
     matches = Array.from(textWithoutQuoted.matchAll(unquotedRegex));
     console.log('[extractImagePaths] Unquoted matches:', matches.length);
-    
+
     for (const match of matches) {
       const path = match[1].trim();
-      // Skip if it looks like a data URL fragment (shouldn't happen with proper quoting)
-      if (path.includes('data:')) continue;
-      
       console.log('[extractImagePaths] Processing unquoted path:', path);
-      
+
       // Convert relative path to absolute if needed
       const fullPath = path.startsWith('/') ? path : (projectPath ? `${projectPath}/${path}` : path);
-      
+
       if (isImageFile(fullPath)) {
         pathsSet.add(fullPath);
       }
@@ -352,13 +352,8 @@ const FloatingPromptInputInner = (
     return uniquePaths;
   };
 
-  // Update embedded images when prompt changes
+  // Auto-resize textarea on prompt change
   useEffect(() => {
-    console.log('[useEffect] Prompt changed:', prompt);
-    const imagePaths = extractImagePaths(prompt);
-    console.log('[useEffect] Setting embeddedImages to:', imagePaths);
-    setEmbeddedImages(imagePaths);
-
     // Auto-resize on prompt change (handles paste, programmatic changes, etc.)
     // Use different max height for mobile vs desktop
     if (textareaRef.current && !isExpanded) {
@@ -370,7 +365,7 @@ const FloatingPromptInputInner = (
       setTextareaHeight(newHeight);
       textareaRef.current.style.height = `${newHeight}px`;
     }
-  }, [prompt, projectPath, isExpanded]);
+  }, [prompt, isExpanded]);
 
   // Tauri drag-drop event listener - disabled in web mode
   /*
@@ -713,6 +708,14 @@ const FloatingPromptInputInner = (
     if (prompt.trim() && !disabled) {
       let finalPrompt = prompt.trim();
 
+      // Replace @[image-xxx] placeholders with actual base64 data URLs
+      for (const image of embeddedImages) {
+        const placeholder = `@[image-${image.id}]`;
+        if (finalPrompt.includes(placeholder)) {
+          finalPrompt = finalPrompt.replace(placeholder, `@"${image.data}"`);
+        }
+      }
+
       // Append thinking phrase if not auto mode
       const thinkingMode = THINKING_MODES.find(m => m.id === selectedThinkingMode);
       if (thinkingMode && thinkingMode.phrase) {
@@ -805,7 +808,7 @@ const FloatingPromptInputInner = (
     for (const item of items) {
       if (item.type.startsWith('image/')) {
         e.preventDefault();
-        
+
         // Get the image blob
         const blob = item.getAsFile();
         if (!blob) continue;
@@ -815,13 +818,19 @@ const FloatingPromptInputInner = (
           const reader = new FileReader();
           reader.onload = () => {
             const base64Data = reader.result as string;
-            
-            // Add the base64 data URL directly to the prompt
+
+            // Generate unique ID for this image
+            imageCounterRef.current += 1;
+            const imageId = `img-${imageCounterRef.current}`;
+
+            // Add to embedded images state for preview
+            setEmbeddedImages(currentImages => [...currentImages, { id: imageId, data: base64Data }]);
+
+            // Add a simple placeholder to the prompt, not the full base64 data
             setPrompt(currentPrompt => {
-              // Use the data URL directly as the image reference
-              const mention = `@"${base64Data}"`;
+              const mention = `@[image-${imageId}]`;
               const newPrompt = currentPrompt + (currentPrompt.endsWith(' ') || currentPrompt === '' ? '' : ' ') + mention + ' ';
-              
+
               // Focus the textarea and move cursor to end
               setTimeout(() => {
                 const target = isExpanded ? expandedTextareaRef.current : textareaRef.current;
@@ -832,7 +841,7 @@ const FloatingPromptInputInner = (
               return newPrompt;
             });
           };
-          
+
           reader.readAsDataURL(blob);
         } catch (error) {
           console.error('Failed to paste image:', error);
@@ -859,22 +868,42 @@ const FloatingPromptInputInner = (
   };
 
   const handleRemoveImage = (index: number) => {
-    // Remove the corresponding @mention from the prompt
-    const imagePath = embeddedImages[index];
-    
-    // For data URLs, we need to handle them specially since they're always quoted
-    if (imagePath.startsWith('data:')) {
-      // Simply remove the exact quoted data URL
-      const quotedPath = `@"${imagePath}"`;
-      const newPrompt = prompt.replace(quotedPath, '').trim();
-      setPrompt(newPrompt);
+    // Get all images (embedded + file paths)
+    const allImages = [
+      ...embeddedImages.map(img => img.data),
+      ...extractImagePaths(prompt)
+    ];
+
+    if (index >= allImages.length) {
+      console.error('[handleRemoveImage] Invalid index');
       return;
     }
-    
+
+    const imageData = allImages[index];
+
+    // Check if it's an embedded image (base64 data URL)
+    if (imageData.startsWith('data:')) {
+      // Find the embedded image with this data
+      const embeddedIndex = embeddedImages.findIndex(img => img.data === imageData);
+      if (embeddedIndex !== -1) {
+        const image = embeddedImages[embeddedIndex];
+        // Remove the @[image-xxx] placeholder
+        const placeholder = `@\\[image-${image.id}\\]`;
+        const pattern = new RegExp(`${placeholder}\\s?`, 'g');
+        const newPrompt = prompt.replace(pattern, '').trim();
+
+        // Remove from embedded images state
+        setEmbeddedImages(currentImages => currentImages.filter((_, i) => i !== embeddedIndex));
+        setPrompt(newPrompt);
+      }
+      return;
+    }
+
     // For file paths, use the original logic
+    const imagePath = imageData;
     const escapedPath = imagePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const escapedRelativePath = imagePath.replace(projectPath + '/', '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    
+
     // Create patterns for both quoted and unquoted mentions
     const patterns = [
       // Quoted full path
@@ -914,11 +943,15 @@ const FloatingPromptInputInner = (
     reader.onload = (event) => {
       const dataUrl = event.target?.result as string;
       if (dataUrl) {
-        // Add to embedded images
-        setEmbeddedImages([...embeddedImages, dataUrl]);
+        // Generate unique ID for this image
+        imageCounterRef.current += 1;
+        const imageId = `img-${imageCounterRef.current}`;
 
-        // Add @mention to prompt
-        const mention = `@"${dataUrl}"`;
+        // Add to embedded images state for preview
+        setEmbeddedImages(currentImages => [...currentImages, { id: imageId, data: dataUrl }]);
+
+        // Add a simple placeholder to the prompt, not the full base64 data
+        const mention = `@[image-${imageId}]`;
         const newPrompt = prompt + (prompt.endsWith(' ') || prompt === '' ? '' : ' ') + mention + ' ';
         setPrompt(newPrompt);
 
@@ -981,9 +1014,12 @@ const FloatingPromptInputInner = (
               </div>
 
               {/* Image previews in expanded mode */}
-              {embeddedImages.length > 0 && (
+              {(embeddedImages.length > 0 || extractImagePaths(prompt).length > 0) && (
                 <ImagePreview
-                  images={embeddedImages}
+                  images={[
+                    ...embeddedImages.map(img => img.data),
+                    ...extractImagePaths(prompt)
+                  ]}
                   onRemove={handleRemoveImage}
                   className="border-t border-border pt-2"
                 />
@@ -1164,9 +1200,12 @@ const FloatingPromptInputInner = (
       >
         <div className="w-full">
           {/* Image previews */}
-          {embeddedImages.length > 0 && (
+          {(embeddedImages.length > 0 || extractImagePaths(prompt).length > 0) && (
             <ImagePreview
-              images={embeddedImages}
+              images={[
+                ...embeddedImages.map(img => img.data),
+                ...extractImagePaths(prompt)
+              ]}
               onRemove={handleRemoveImage}
               className="border-b border-border"
             />

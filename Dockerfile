@@ -16,6 +16,7 @@ RUN bun install
 
 # Copy source and build
 COPY src ./src
+COPY src-tauri/icons ./src-tauri/icons
 RUN bun run build
 
 # Stage 2: Build Rust backend
