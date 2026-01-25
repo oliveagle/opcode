@@ -227,6 +227,7 @@ const FloatingPromptInputInner = (
   const [dragActive, setDragActive] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const expandedTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -236,6 +237,23 @@ const FloatingPromptInputInner = (
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [textareaHeight, setTextareaHeight] = useState<number>(48);
   const isIMEComposingRef = useRef(false);
+
+  // Detect mobile keyboard visibility
+  useEffect(() => {
+    const handleFocus = () => setIsKeyboardVisible(true);
+    const handleBlur = () => setIsKeyboardVisible(false);
+
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.addEventListener('focus', handleFocus);
+      textarea.addEventListener('blur', handleBlur);
+
+      return () => {
+        textarea.removeEventListener('focus', handleFocus);
+        textarea.removeEventListener('blur', handleBlur);
+      };
+    }
+  }, []);
 
   // Expose a method to add images programmatically
   React.useImperativeHandle(
@@ -1295,7 +1313,7 @@ const FloatingPromptInputInner = (
 
               {/* Prompt Input - Center */}
               <div className="flex-1 relative">
-                {/* Resize handle - visible at the top of the input */}
+                {/* Resize handle - hidden on mobile and when keyboard is visible */}
                 <div
                   ref={resizeHandleRef}
                   onMouseDown={handleResizeStart}
@@ -1305,7 +1323,8 @@ const FloatingPromptInputInner = (
                     "flex items-center justify-center",
                     "md:opacity-0 hover:md:opacity-100 transition-opacity",
                     "md:hover:bg-muted/50",
-                    isResizing && "opacity-100"
+                    isResizing && "opacity-100",
+                    (isKeyboardVisible) && "hidden"
                   )}
                   style={{ width: '48px', height: '12px' }}
                 >
@@ -1329,6 +1348,7 @@ const FloatingPromptInputInner = (
                   className={cn(
                     "resize-none pr-10 md:pr-20 pl-2 md:pl-3 py-2.5 transition-all duration-150",
                     "md:py-2.5 py-2", // Smaller padding on mobile
+                    isKeyboardVisible && "py-1.5", // Even smaller when keyboard is visible
                     dragActive && "border-primary",
                     textareaHeight >= 120 && "overflow-y-auto scrollbar-thin"
                   )}
