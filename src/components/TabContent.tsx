@@ -19,6 +19,7 @@ const CreateAgent = lazy(() => import('@/components/CreateAgent').then(m => ({ d
 const Agents = lazy(() => import('@/components/Agents').then(m => ({ default: m.Agents })));
 const UsageDashboard = lazy(() => import('@/components/UsageDashboard').then(m => ({ default: m.UsageDashboard })));
 const MCPManager = lazy(() => import('@/components/MCPManager').then(m => ({ default: m.MCPManager })));
+const ProcessMonitor = lazy(() => import('@/components/ProcessMonitor').then(m => ({ default: m.ProcessMonitor })));
 const Settings = lazy(() => import('@/components/Settings').then(m => ({ default: m.Settings })));
 const MarkdownEditor = lazy(() => import('@/components/MarkdownEditor').then(m => ({ default: m.MarkdownEditor })));
 // const ClaudeFileEditor = lazy(() => import('@/components/ClaudeFileEditor').then(m => ({ default: m.ClaudeFileEditor })));
@@ -51,6 +52,19 @@ const TabPanel: React.FC<TabPanelProps> = ({ tab, isActive }) => {
       loadProjects();
     }
   }, [isActive, tab.type]);
+
+  // Refresh session data when chat tab becomes active and needs refresh
+  const { refreshTabSession } = useTabState();
+  useEffect(() => {
+    if (isActive && tab.type === 'chat' && tab.needsSessionRefresh && tab.sessionId) {
+      console.log(`[TabPanel] Refreshing session data for tab ${tab.id}`);
+      refreshTabSession(tab.id).then(success => {
+        if (!success) {
+          console.warn(`[TabPanel] Failed to refresh session for tab ${tab.id}, session may be unavailable`);
+        }
+      });
+    }
+  }, [isActive, tab.type, tab.needsSessionRefresh, tab.sessionId, tab.id, refreshTabSession]);
   
   const loadProjects = async () => {
     try {
@@ -333,7 +347,14 @@ const TabPanel: React.FC<TabPanelProps> = ({ tab, isActive }) => {
             <MCPManager onBack={() => {}} />
           </div>
         );
-      
+
+      case 'process-monitor':
+        return (
+          <div className="h-full">
+            <ProcessMonitor />
+          </div>
+        );
+
       case 'settings':
         return (
           <div className="h-full">

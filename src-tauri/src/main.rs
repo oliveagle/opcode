@@ -36,6 +36,10 @@ use commands::mcp::{
     mcp_serve, mcp_test_connection,
 };
 
+use commands::process_monitor::{
+    get_all_processes, get_process_stats, kill_all_agent_runs, kill_all_claude_sessions,
+    kill_all_processes, kill_process_by_run_id,
+};
 use commands::proxy::{apply_proxy_settings, get_proxy_settings, save_proxy_settings};
 use commands::storage::{
     storage_delete_row, storage_execute_sql, storage_insert_row, storage_list_tables,
@@ -289,6 +293,13 @@ fn main() {
             // Proxy Settings
             get_proxy_settings,
             save_proxy_settings,
+            // Process Monitor
+            get_all_processes,
+            get_process_stats,
+            kill_process_by_run_id,
+            kill_all_processes,
+            kill_all_claude_sessions,
+            kill_all_agent_runs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

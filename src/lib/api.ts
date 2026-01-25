@@ -439,10 +439,37 @@ export interface ImportResult {
  * Result for individual server import
  */
 export interface ImportServerResult {
-  name: string;
+  name?: string;
   success: boolean;
+  message?: string;
   error?: string;
 }
+
+/** Process monitor information */
+export interface ProcessMonitorInfo {
+  run_id: number;
+  pid: number;
+  process_type: string;
+  session_id?: string;
+  agent_id?: number;
+  agent_name?: string;
+  started_at: string;
+  project_path: string;
+  task: string;
+  model: string;
+  duration_seconds: number;
+}
+
+/** Process monitor statistics */
+export interface ProcessMonitorStats {
+  total_processes: number;
+  claude_sessions: number;
+  agent_runs: number;
+}
+
+/**
+ * Result of GitHub agent import operation
+ */
 
 /**
  * API client for interacting with the Rust backend
@@ -1942,4 +1969,92 @@ export const api = {
     }
   },
 
+  /**
+   * Gets all running processes (Claude sessions and agent runs)
+   * @returns Promise resolving to array of process information
+   */
+  async getAllProcesses(): Promise<ProcessMonitorInfo[]> {
+    try {
+      return await apiCall<ProcessMonitorInfo[]>("get_all_processes");
+    } catch (error) {
+      console.error("Failed to get processes:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Gets process statistics
+   * @returns Promise resolving to process statistics
+   */
+  async getProcessStats(): Promise<ProcessMonitorStats> {
+    try {
+      return await apiCall<ProcessMonitorStats>("get_process_stats");
+    } catch (error) {
+      console.error("Failed to get process stats:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Kills a specific process by run ID
+   * @param runId - The run ID of the process to kill
+   * @returns Promise resolving to success boolean
+   */
+  async killProcessByRunId(runId: number): Promise<boolean> {
+    try {
+      return await apiCall<boolean>("kill_process_by_run_id", { runId });
+    } catch (error) {
+      console.error("Failed to kill process:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Kills all running processes
+   * @returns Promise resolving to number of processes killed
+   */
+  async killAllProcesses(): Promise<number> {
+    try {
+      return await apiCall<number>("kill_all_processes");
+    } catch (error) {
+      console.error("Failed to kill all processes:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Kills all Claude sessions
+   * @returns Promise resolving to number of sessions killed
+   */
+  async killAllClaudeSessions(): Promise<number> {
+    try {
+      return await apiCall<number>("kill_all_claude_sessions");
+    } catch (error) {
+      console.error("Failed to kill Claude sessions:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Kills all agent runs
+   * @returns Promise resolving to number of agents killed
+   */
+  async killAllAgentRuns(): Promise<number> {
+    try {
+      return await apiCall<number>("kill_all_agent_runs");
+    } catch (error) {
+      console.error("Failed to kill agent runs:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Generic API call method for direct backend invocation
+   * @param command - The Tauri command or API endpoint name
+   * @param params - Optional parameters to pass to the command
+   * @returns Promise resolving to the command result
+   */
+  async call<T>(command: string, params?: any): Promise<T> {
+    return await apiCall<T>(command, params);
+  },
 };

@@ -17,6 +17,7 @@ import { Settings } from "@/components/Settings";
 import { CCAgents } from "@/components/CCAgents";
 import { UsageDashboard } from "@/components/UsageDashboard";
 import { MCPManager } from "@/components/MCPManager";
+import { ProcessMonitor } from "@/components/ProcessMonitor";
 import { NFOCredits } from "@/components/NFOCredits";
 import { ClaudeBinaryDialog } from "@/components/ClaudeBinaryDialog";
 import { Toast, ToastContainer } from "@/components/ui/toast";
@@ -27,11 +28,11 @@ import { useTabState } from "@/hooks/useTabState";
 import { useAppLifecycle, useTrackEvent } from "@/hooks";
 import { StartupIntro } from "@/components/StartupIntro";
 
-type View = 
-  | "welcome" 
-  | "projects" 
-  | "editor" 
-  | "claude-file-editor" 
+type View =
+  | "welcome"
+  | "projects"
+  | "editor"
+  | "claude-file-editor"
   | "settings"
   | "cc-agents"
   | "create-agent"
@@ -41,6 +42,7 @@ type View =
   | "mcp"
   | "usage-dashboard"
   | "project-settings"
+  | "process-monitor"
   | "tabs"; // New view for tab-based interface
 
 /**
@@ -48,7 +50,7 @@ type View =
  */
 function AppContent() {
   const [view, setView] = useState<View>("tabs");
-  const { createClaudeMdTab, createSettingsTab, createUsageTab, createMCPTab, createAgentsTab } = useTabState();
+  const { createClaudeMdTab, createSettingsTab, createUsageTab, createMCPTab, createAgentsTab, createProcessMonitorTab } = useTabState();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -355,7 +357,12 @@ function AppContent() {
         return (
           <MCPManager onBack={() => handleViewChange("welcome")} />
         );
-      
+
+      case "process-monitor":
+        return (
+          <ProcessMonitor />
+        );
+
       case "project-settings":
         if (projectForSettings) {
           return (
@@ -383,6 +390,7 @@ function AppContent() {
         onUsageClick={() => createUsageTab()}
         onClaudeClick={() => createClaudeMdTab()}
         onMCPClick={() => createMCPTab()}
+        onProcessMonitorClick={() => createProcessMonitorTab()}
         onSettingsClick={() => createSettingsTab()}
         onInfoClick={() => setShowNFO(true)}
       />

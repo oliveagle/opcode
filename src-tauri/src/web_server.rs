@@ -68,6 +68,8 @@ pub struct AppState {
         Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<String>>>>,
     // Database path for on-demand connections
     pub db_path: std::path::PathBuf,
+    // Process registry for monitoring
+    pub process_registry: Arc<crate::process::registry::ProcessRegistry>,
 }
 
 /// Get a new database connection from the path
@@ -1810,6 +1812,7 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
     let state = AppState {
         active_sessions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         db_path,
+        process_registry: Arc::new(crate::process::registry::ProcessRegistry::new()),
     };
 
     // CORS layer to allow requests from phone browsers
@@ -1857,6 +1860,13 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
         .route("/api/slash-commands", get(list_slash_commands))
         // MCP
         .route("/api/mcp/servers", get(mcp_list).post(mcp_add))
+        // Process Monitor
+        .route("/api/processes", get(get_all_processes_web))
+        .route("/api/processes/stats", get(get_process_stats_web))
+        .route("/api/processes/kill/all", get(kill_all_processes_web))
+        .route("/api/processes/kill/claude-sessions", get(kill_all_claude_sessions_web))
+        .route("/api/processes/kill/agent-runs", get(kill_all_agent_runs_web))
+        .route("/api/processes/{runId}/kill", get(kill_process_web))
         // Session history
         .route(
             "/api/sessions/{session_id}/history/{project_id}",
@@ -1899,4 +1909,178 @@ pub async fn start_web_mode(port: Option<u16>) -> Result<(), Box<dyn std::error:
 
     println!("🚀 Starting Opcode in web server mode...");
     create_web_server(port).await
+}
+
+// ============ Process Monitor API Endpoints ============
+
+/// Get all running processes
+async fn get_all_processes_web(
+    AxumState(state): AxumState<AppState>,
+) -> impl axum::response::IntoResponse {
+    let result = state.process_registry.get_running_processes();
+
+    match result {
+        Ok(processes) => {
+            let now = chrono::Utc::now();
+            let monitor_info: Vec<crate::commands::process_monitor::ProcessMonitorInfo> = processes
+                .into_iter()
+                .map(|p| {
+                    let duration = now.signed_duration_since(p.started_at);
+
+                    let (process_type, session_id, agent_id, agent_name) = match p.process_type {
+                        crate::process::registry::ProcessType::ClaudeSession { session_id } => (
+                            "claude_session".to_string(),
+                            Some(session_id),
+                            None,
+                            None,
+                        ),
+                        crate::process::registry::ProcessType::AgentRun {
+                            agent_id,
+                            agent_name,
+                        } => (
+                            "agent_run".to_string(),
+                            None,
+                            Some(agent_id),
+                            Some(agent_name),
+                        ),
+                    };
+
+                    crate::commands::process_monitor::ProcessMonitorInfo {
+                        run_id: p.run_id,
+                        pid: p.pid,
+                        process_type,
+                        session_id,
+                        agent_id,
+                        agent_name,
+                        started_at: p.started_at.to_rfc3339(),
+                        project_path: p.project_path,
+                        task: p.task,
+                        model: p.model,
+                        duration_seconds: duration.num_seconds(),
+                    }
+                })
+                .collect();
+
+            Json(ApiResponse::success(monitor_info))
+        }
+        Err(e) => Json(ApiResponse::<Vec<crate::commands::process_monitor::ProcessMonitorInfo>>::error(e)),
+    }
+}
+
+/// Get process statistics
+async fn get_process_stats_web(
+    AxumState(state): AxumState<AppState>,
+) -> impl axum::response::IntoResponse {
+    let processes = state.process_registry.get_running_processes();
+
+    match processes {
+        Ok(processes) => {
+            let claude_sessions = state
+                .process_registry
+                .get_running_claude_sessions();
+            let agent_runs = state
+                .process_registry
+                .get_running_agent_processes();
+
+            match (claude_sessions, agent_runs) {
+                (Ok(sessions), Ok(agents)) => {
+                    let stats = crate::commands::process_monitor::ProcessMonitorStats {
+                        total_processes: processes.len(),
+                        claude_sessions: sessions.len(),
+                        agent_runs: agents.len(),
+                    };
+                    Json(ApiResponse::success(stats))
+                }
+                _ => Json(ApiResponse::<crate::commands::process_monitor::ProcessMonitorStats>::error(
+                    "Failed to get process details".to_string(),
+                )),
+            }
+        }
+        Err(e) => Json(ApiResponse::<crate::commands::process_monitor::ProcessMonitorStats>::error(e)),
+    }
+}
+
+/// Kill a specific process by run_id
+async fn kill_process_web(
+    Path(run_id): Path<i64>,
+    AxumState(state): AxumState<AppState>,
+) -> impl axum::response::IntoResponse {
+    let result = state.process_registry.kill_process(run_id).await;
+
+    match result {
+        Ok(killed) => Json(ApiResponse::success(killed)),
+        Err(e) => Json(ApiResponse::<bool>::error(e)),
+    }
+}
+
+/// Kill all processes
+async fn kill_all_processes_web(
+    AxumState(state): AxumState<AppState>,
+) -> impl axum::response::IntoResponse {
+    let processes = state.process_registry.get_running_processes();
+    let mut killed_count = 0;
+
+    if let Ok(processes) = processes {
+        for process in processes {
+            match state.process_registry.kill_process(process.run_id).await {
+                Ok(true) => killed_count += 1,
+                Ok(false) => {
+                    log::warn!("Process {} was not found", process.run_id);
+                }
+                Err(e) => {
+                    log::error!("Failed to kill process {}: {}", process.run_id, e);
+                }
+            }
+        }
+    }
+
+    Json(ApiResponse::success(killed_count))
+}
+
+/// Kill all Claude sessions
+async fn kill_all_claude_sessions_web(
+    AxumState(state): AxumState<AppState>,
+) -> impl axum::response::IntoResponse {
+    let sessions = state.process_registry.get_running_claude_sessions();
+    let mut killed_count = 0;
+
+    if let Ok(sessions) = sessions {
+        for session in sessions {
+            match state.process_registry.kill_process(session.run_id).await {
+                Ok(true) => killed_count += 1,
+                Ok(false) => {
+                    log::warn!("Session {} was not found", session.run_id);
+                }
+                Err(e) => {
+                    log::error!("Failed to kill session {}: {}", session.run_id, e);
+                }
+            }
+        }
+    }
+
+    Json(ApiResponse::success(killed_count))
+}
+
+/// Kill all agent runs
+async fn kill_all_agent_runs_web(
+    AxumState(state): AxumState<AppState>,
+) -> impl axum::response::IntoResponse {
+    let agents = state.process_registry.get_running_agent_processes();
+    let mut killed_count = 0;
+
+    if let Ok(agents) = agents {
+        for agent in agents {
+            match state.process_registry.kill_process(agent.run_id).await {
+                Ok(true) => killed_count += 1,
+                Ok(false) => {
+                    log::warn!("Agent run {} was not found", agent.run_id);
+                }
+                Err(e) => {
+                    log::error!("Failed to kill agent run {}: {}", agent.run_id, e);
+                }
+            }
+        }
+    }
+
+    Json(ApiResponse::success(killed_count))
 }

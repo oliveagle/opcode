@@ -10,7 +10,7 @@ interface UseTabStateReturn {
   tabCount: number;
   chatTabCount: number;
   agentTabCount: number;
-  
+
   // Operations
   createChatTab: (projectId?: string, title?: string, projectPath?: string) => string;
   createAgentTab: (agentRunId: string, agentName: string) => string;
@@ -19,6 +19,7 @@ interface UseTabStateReturn {
   createAgentsTab: () => string | null;
   createUsageTab: () => string | null;
   createMCPTab: () => string | null;
+  createProcessMonitorTab: () => string | null;
   createSettingsTab: () => string | null;
   createClaudeMdTab: () => string | null;
   createClaudeFileTab: (fileId: string, fileName: string) => string;
@@ -38,6 +39,8 @@ interface UseTabStateReturn {
   findTabByAgentRunId: (agentRunId: string) => Tab | undefined;
   findTabByType: (type: Tab['type']) => Tab | undefined;
   canAddTab: () => boolean;
+  refreshTabSession: (tabId: string) => Promise<boolean>;
+  validateAndCleanupTabs: () => void;
 }
 
 export const useTabState = (): UseTabStateReturn => {
@@ -49,7 +52,9 @@ export const useTabState = (): UseTabStateReturn => {
     updateTab,
     setActiveTab,
     getTabById,
-    getTabsByType
+    getTabsByType,
+    refreshTabSession,
+    validateAndCleanupTabs
   } = useTabContext();
 
   const activeTab = useMemo(() => 
@@ -151,6 +156,23 @@ export const useTabState = (): UseTabStateReturn => {
       status: 'idle',
       hasUnsavedChanges: false,
       icon: 'server'
+    });
+  }, [addTab, tabs, setActiveTab]);
+
+  const createProcessMonitorTab = useCallback((): string | null => {
+    // Check if process monitor tab already exists (singleton)
+    const existingTab = tabs.find(tab => tab.type === 'process-monitor');
+    if (existingTab) {
+      setActiveTab(existingTab.id);
+      return existingTab.id;
+    }
+
+    return addTab({
+      type: 'process-monitor',
+      title: 'Process Monitor',
+      status: 'idle',
+      hasUnsavedChanges: false,
+      icon: 'activity'
     });
   }, [addTab, tabs, setActiveTab]);
 
@@ -339,6 +361,7 @@ export const useTabState = (): UseTabStateReturn => {
     createAgentsTab,
     createUsageTab,
     createMCPTab,
+    createProcessMonitorTab,
     createSettingsTab,
     createClaudeMdTab,
     createClaudeFileTab,
@@ -357,6 +380,8 @@ export const useTabState = (): UseTabStateReturn => {
     findTabBySessionId,
     findTabByAgentRunId,
     findTabByType,
-    canAddTab
+    canAddTab,
+    refreshTabSession,
+    validateAndCleanupTabs
   };
 };
