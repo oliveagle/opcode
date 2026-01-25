@@ -315,10 +315,8 @@ export function ProcessMonitor() {
           ) : (
             <div className="divide-y">
               {processes.map((process) => (
-                <motion.div
+                <div
                   key={process.run_id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
                   className="p-4 hover:bg-muted/50 transition-colors"
                 >
                   <div className="flex items-start justify-between gap-4">
@@ -414,7 +412,7 @@ export function ProcessMonitor() {
                       </TooltipProvider>
                     </div>
                   </div>
-                </motion.div>
+                </div>
               ))}
             </div>
           )}
