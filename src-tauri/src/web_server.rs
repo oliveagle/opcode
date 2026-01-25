@@ -3,7 +3,7 @@ use axum::http::Method;
 use axum::{
     extract::{Path, Query, State as AxumState, WebSocketUpgrade},
     response::{Html, Json, Response},
-    routing::{get, MethodRouter},
+    routing::{delete, get, post, MethodRouter},
     Router,
 };
 use chrono;
@@ -1863,10 +1863,10 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
         // Process Monitor
         .route("/api/processes", get(get_all_processes_web))
         .route("/api/processes/stats", get(get_process_stats_web))
-        .route("/api/processes/kill/all", get(kill_all_processes_web))
-        .route("/api/processes/kill/claude-sessions", get(kill_all_claude_sessions_web))
-        .route("/api/processes/kill/agent-runs", get(kill_all_agent_runs_web))
-        .route("/api/processes/{runId}/kill", get(kill_process_web))
+        .route("/api/processes/kill/all", post(kill_all_processes_web).delete(kill_all_processes_web))
+        .route("/api/processes/kill/claude-sessions", post(kill_all_claude_sessions_web).delete(kill_all_claude_sessions_web))
+        .route("/api/processes/kill/agent-runs", post(kill_all_agent_runs_web).delete(kill_all_agent_runs_web))
+        .route("/api/processes/{runId}/kill", post(kill_process_web).delete(kill_process_web))
         // Session history
         .route(
             "/api/sessions/{session_id}/history/{project_id}",
