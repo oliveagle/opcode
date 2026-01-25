@@ -6,13 +6,13 @@ FROM oven/bun:1 AS frontend-builder
 WORKDIR /build
 
 # Copy package files
-COPY package.json bun.lockb ./
+COPY package.json bun.lock ./
 COPY tsconfig*.json ./
 COPY vite.config.ts ./
 COPY index.html ./
 
 # Install dependencies
-RUN bun install --frozen-lockfile
+RUN bun install
 
 # Copy source and build
 COPY src ./src
