@@ -12,7 +12,7 @@ import {
   Lightbulb,
   Cpu,
   Rocket,
-  
+  Image as ImageIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -231,6 +231,7 @@ const FloatingPromptInputInner = (
   // Tauri drag-drop ref (only used in Tauri desktop mode)
   // const unlistenDragDropRef = useRef<(() => void) | null>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [textareaHeight, setTextareaHeight] = useState<number>(48);
   const isIMEComposingRef = useRef(false);
 
@@ -874,6 +875,49 @@ const FloatingPromptInputInner = (
     setPrompt(newPrompt.trim());
   };
 
+  const handleFileInputClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const file = files[0];
+    if (!file.type.startsWith('image/')) {
+      console.error('[handleFileInputChange] Not an image file');
+      return;
+    }
+
+    // Convert image to base64 data URL
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (dataUrl) {
+        // Add to embedded images
+        setEmbeddedImages([...embeddedImages, dataUrl]);
+
+        // Add @mention to prompt
+        const mention = `@"${dataUrl}"`;
+        const newPrompt = prompt + (prompt.endsWith(' ') || prompt === '' ? '' : ' ') + mention + ' ';
+        setPrompt(newPrompt);
+
+        // Focus the textarea
+        setTimeout(() => {
+          const target = isExpanded ? expandedTextareaRef.current : textareaRef.current;
+          target?.focus();
+          target?.setSelectionRange(newPrompt.length, newPrompt.length);
+        }, 0);
+      }
+    };
+    reader.readAsDataURL(file);
+
+    // Reset the input so the same file can be selected again
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   const selectedModelData = MODELS.find(m => m.id === selectedModel) || MODELS[0];
 
   return (
@@ -1098,7 +1142,7 @@ const FloatingPromptInputInner = (
         onDragOver={handleDrag}
         onDrop={handleDrop}
       >
-        <div className="container mx-auto">
+        <div className="w-full">
           {/* Image previews */}
           {embeddedImages.length > 0 && (
             <ImagePreview
@@ -1293,7 +1337,7 @@ const FloatingPromptInputInner = (
                 />
 
                 {/* Action buttons inside input - fixed at bottom right */}
-                <div className="absolute right-1.5 bottom-1.5 flex items-center gap-0.5">
+                <div className="absolute right-2 bottom-2 flex items-center gap-0.5">
                   <TooltipSimple content="Expand (Ctrl+Shift+E)" side="top">
                     <motion.div
                       whileTap={{ scale: 0.97 }}
@@ -1307,6 +1351,23 @@ const FloatingPromptInputInner = (
                         className="h-8 w-8 hover:bg-accent/50 transition-colors"
                       >
                         <Maximize2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </motion.div>
+                  </TooltipSimple>
+
+                  <TooltipSimple content="Upload image" side="top">
+                    <motion.div
+                      whileTap={{ scale: 0.97 }}
+                      transition={{ duration: 0.15 }}
+                    >
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={handleFileInputClick}
+                        disabled={disabled}
+                        className="h-8 w-8 hover:bg-accent/50 transition-colors"
+                      >
+                        <ImageIcon className="h-3.5 w-3.5" />
                       </Button>
                     </motion.div>
                   </TooltipSimple>
@@ -1359,6 +1420,16 @@ const FloatingPromptInputInner = (
                     />
                   )}
                 </AnimatePresence>
+
+                {/* Hidden file input for image upload */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileInputChange}
+                  className="hidden"
+                  aria-label="Upload image"
+                />
               </div>
 
               {/* Extra menu items - Right side, fixed at bottom */}
