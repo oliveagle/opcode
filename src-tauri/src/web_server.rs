@@ -193,10 +193,31 @@ fn init_web_db() -> Result<std::path::PathBuf, String> {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
-                value TEXT
+                value TEXT NOT NULL,
+                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
             )",
             [],
         ).map_err(|e| format!("Failed to create app_settings table: {}", e))?;
+
+        // Create message_queue table for persistent message handling
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS message_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                command_type TEXT NOT NULL,
+                project_path TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                model TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                processed_at INTEGER,
+                error TEXT,
+                retries INTEGER DEFAULT 0,
+                INDEX (session_id, status)
+            )",
+            [],
+        ).map_err(|e| format!("Failed to create message_queue table: {}", e))?;
+
     }
 
     println!("[init_web_db] Database initialized at: {:?}", db_path);
