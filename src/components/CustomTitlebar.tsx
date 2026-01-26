@@ -60,7 +60,14 @@ export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
     const unsubscribe = networkStatusManager.subscribe((status) => {
       setNetworkStatus(status);
     });
-    return unsubscribe;
+
+    // Start periodic health checks to detect server availability
+    networkStatusManager.startHealthCheck();
+
+    return () => {
+      unsubscribe();
+      networkStatusManager.stopHealthCheck();
+    };
   }, []);
 
   // Fetch process count periodically

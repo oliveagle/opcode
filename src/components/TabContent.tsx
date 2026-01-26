@@ -128,8 +128,9 @@ const TabPanel: React.FC<TabPanelProps> = ({ tab, isActive }) => {
         setError('Failed to open folder picker');
       }
     } else {
-      // Web mode - show server directory browser
-      setDirBrowserPath('/');
+      // Web mode - show server directory browser starting from home directory
+      const homePath = await api.getHomeDirectory();
+      setDirBrowserPath(homePath);
       setShowDirBrowser(true);
     }
   };

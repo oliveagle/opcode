@@ -58,8 +58,31 @@ const TabItem: React.FC<TabItemProps> = ({ tab, isActive, onClose, onClick, isDr
     }
   };
 
+  const getTabLabel = () => {
+    // For chat tabs with session data, show project name abbreviation
+    if (tab.type === 'chat' && tab.sessionData?.project_path) {
+      const projectName = tab.sessionData.project_path.split('/').pop() || '';
+      // Show first 6 characters of project name
+      return projectName.length > 6 ? projectName.substring(0, 6) : projectName;
+    }
+
+    // For chat tabs with sessionId but no sessionData (session couldn't be restored)
+    // Show project name (if available from title) or short session ID for visual distinction
+    if (tab.type === 'chat' && tab.sessionId && !tab.sessionData) {
+      // Try to get project name from title first
+      if (tab.title && tab.title !== 'Chat') {
+        return tab.title.length > 8 ? tab.title.substring(0, 8) : tab.title;
+      }
+      // Show short session ID for visual distinction
+      return tab.sessionId.substring(0, 6);
+    }
+
+    return tab.title;
+  };
+
   const Icon = getIcon();
   const statusIcon = getStatusIcon();
+  const tabLabel = getTabLabel();
 
   return (
     <Reorder.Item
@@ -88,8 +111,8 @@ const TabItem: React.FC<TabItemProps> = ({ tab, isActive, onClose, onClick, isDr
       </div>
       
       {/* Tab Title */}
-      <span className="flex-1 truncate text-xs font-medium min-w-0">
-        {tab.title}
+      <span className="flex-1 truncate text-xs font-medium min-w-0" title={tab.title}>
+        {tabLabel}
       </span>
 
       {/* Status Indicators - always takes up space */}

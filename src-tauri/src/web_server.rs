@@ -9,7 +9,7 @@ use axum::{
 use chrono;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -127,6 +127,15 @@ impl<T> ApiResponse<T> {
 /// Serve the React frontend
 async fn serve_frontend() -> Html<&'static str> {
     Html(include_str!("../../dist/index.html"))
+}
+
+/// Health check endpoint for client-side connectivity monitoring
+async fn health_check() -> Json<Value> {
+    Json(json!({
+        "status": "ok",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "version": env!("CARGO_PKG_VERSION")
+    }))
 }
 
 /// Initialize SQLite database for web mode
@@ -1403,11 +1412,55 @@ async fn resume_claude_code() -> Json<ApiResponse<serde_json::Value>> {
 }
 
 /// Cancel Claude execution
-async fn cancel_claude_execution(Path(session_id): Path<String>) -> Json<ApiResponse<()>> {
-    // In web mode, we don't have a way to cancel the subprocess cleanly
-    // The WebSocket closing should handle cleanup
+async fn cancel_claude_execution(
+    Path(session_id): Path<String>,
+    AxumState(state): AxumState<AppState>,
+) -> Json<ApiResponse<()>> {
     println!("[TRACE] Cancel request for session: {}", session_id);
-    Json(ApiResponse::success(()))
+
+    // Try to find and kill the Claude session via process registry
+    match state.process_registry.get_running_claude_sessions() {
+        Ok(sessions) => {
+            let mut killed = false;
+            for session in sessions {
+                // Check if this session matches the requested session_id
+                let matches = match &session.process_type {
+                    crate::process::registry::ProcessType::ClaudeSession { session_id: s_id } => {
+                        s_id == &session_id
+                    }
+                    _ => false,
+                };
+
+                if matches {
+                    println!("[TRACE] Found matching session with run_id: {}, attempting to kill", session.run_id);
+                    match state.process_registry.kill_process(session.run_id).await {
+                        Ok(true) => {
+                            println!("[TRACE] Successfully killed process for session: {}", session_id);
+                            killed = true;
+                        }
+                        Ok(false) => {
+                            println!("[TRACE] Kill returned false for session: {}", session_id);
+                        }
+                        Err(e) => {
+                            println!("[TRACE] Failed to kill process for session {}: {}", session_id, e);
+                        }
+                    }
+                }
+            }
+
+            if killed {
+                Json(ApiResponse::success(()))
+            } else {
+                // No running process found for this session - this is expected if the process already completed
+                println!("[TRACE] No running process found for session: {} (may have already completed)", session_id);
+                Json(ApiResponse::success(()))
+            }
+        }
+        Err(e) => {
+            println!("[TRACE] Failed to query process registry: {}", e);
+            Json(ApiResponse::error(format!("Failed to cancel execution: {}", e)))
+        }
+    }
 }
 
 /// Store a message in the message queue for persistence
@@ -1784,6 +1837,15 @@ async fn execute_claude_command(
     println!("[TRACE]   model: {}", model);
     println!("[TRACE]   session_id: {}", session_id);
 
+    // Check for base64 image data in the prompt
+    let base64_image_regex = regex::Regex::new(r#"@"data:image/[^"]+""#).unwrap();
+    let has_images = base64_image_regex.is_match(&prompt);
+    let image_count = base64_image_regex.find_iter(&prompt).count();
+    if has_images {
+        println!("[TRACE] Detected base64 image data in prompt");
+        println!("[TRACE] Found {} image(s) in prompt", image_count);
+    }
+
     // Send initial message
     println!("[TRACE] Sending initial start message");
     send_to_session(
@@ -1836,7 +1898,24 @@ async fn execute_claude_command(
         println!("[TRACE] Spawn error: {}", error);
         error
     })?;
-    println!("[TRACE] Claude process spawned successfully");
+    let pid = child.id().ok_or_else(|| {
+        let error = "Failed to get PID from spawned process".to_string();
+        println!("[TRACE] PID error: {}", error);
+        error
+    })?;
+    println!("[TRACE] Claude process spawned successfully with PID: {}", pid);
+
+    // Register the Claude session in the process registry for cancellation support
+    let run_id = state.process_registry.register_claude_session(
+        session_id.clone(),
+        pid,
+        project_path.clone(),
+        prompt[..std::cmp::min(prompt.len(), 100)].to_string(), // Truncate for display
+        model.clone(),
+    ).map_err(|e| {
+        format!("Failed to register Claude process: {}", e)
+    })?;
+    println!("[TRACE] Claude process registered with run_id: {}", run_id);
 
     // Get stdout for streaming
     let stdout = child.stdout.take().ok_or_else(|| {
@@ -1876,16 +1955,31 @@ async fn execute_claude_command(
         error
     })?;
 
+    // Unregister the process from registry on completion
+    let _ = state.process_registry.unregister_process(run_id).map_err(|e| format!("Failed to unregister process: {}", e))?;
+    println!("[TRACE] Claude process unregistered (run_id: {})", run_id);
+
     println!(
         "[TRACE] Claude process completed with status: {:?}",
         exit_status
     );
 
     if !exit_status.success() {
-        let error = format!(
+        let mut error = format!(
             "Claude execution failed with exit code: {:?}",
             exit_status.code()
         );
+
+        // Add more context if images were detected
+        if has_images {
+            error = format!(
+                "{}\n\nNote: Your prompt contained {} embedded image(s). \
+                Images may not be supported in web mode command-line execution. \
+                Please try again without images, or use the desktop app for image support.",
+                error, image_count
+            );
+        }
+
         println!("[TRACE] Claude execution failed: {}", error);
         return Err(error);
     }
@@ -1940,6 +2034,23 @@ async fn continue_claude_command(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn Claude: {}", e))?;
+    let pid = child.id().ok_or_else(|| {
+        format!("Failed to get PID from spawned process")
+    })?;
+    println!("[TRACE] continue_claude_command: Claude process spawned with PID: {}", pid);
+
+    // Register the Claude session in the process registry for cancellation support
+    let run_id = state.process_registry.register_claude_session(
+        session_id.clone(),
+        pid,
+        project_path.clone(),
+        prompt[..std::cmp::min(prompt.len(), 100)].to_string(),
+        model.clone(),
+    ).map_err(|e| {
+        format!("Failed to register Claude process: {}", e)
+    })?;
+    println!("[TRACE] continue_claude_command: Claude process registered with run_id: {}", run_id);
+
     let stdout = child.stdout.take().ok_or("Failed to get stdout")?;
     let stdout_reader = BufReader::new(stdout);
 
@@ -1961,6 +2072,11 @@ async fn continue_claude_command(
         .wait()
         .await
         .map_err(|e| format!("Failed to wait for Claude: {}", e))?;
+
+    // Unregister the process from registry on completion
+    let _ = state.process_registry.unregister_process(run_id);
+    println!("[TRACE] continue_claude_command: Claude process unregistered (run_id: {})", run_id);
+
     if !exit_status.success() {
         return Err(format!(
             "Claude execution failed with exit code: {:?}",
@@ -2089,7 +2205,25 @@ async fn resume_claude_command(
         println!("[resume_claude_command] Spawn error: {}", error);
         error
     })?;
-    println!("[resume_claude_command] Process spawned successfully");
+    let pid = child.id().ok_or_else(|| {
+        let error = "Failed to get PID from spawned process".to_string();
+        println!("[resume_claude_command] PID error: {}", error);
+        error
+    })?;
+    println!("[resume_claude_command] Process spawned successfully with PID: {}", pid);
+
+    // Register the Claude session in the process registry for cancellation support
+    let run_id = state.process_registry.register_claude_session(
+        session_id.clone(),
+        pid,
+        project_path.clone(),
+        prompt[..std::cmp::min(prompt.len(), 100)].to_string(),
+        model.clone(),
+    ).map_err(|e| {
+        format!("Failed to register Claude process: {}", e)
+    })?;
+    println!("[resume_claude_command] Claude process registered with run_id: {}", run_id);
+
     let stdout = child.stdout.take().ok_or("Failed to get stdout")?;
     let stdout_reader = BufReader::new(stdout);
 
@@ -2111,6 +2245,11 @@ async fn resume_claude_command(
         .wait()
         .await
         .map_err(|e| format!("Failed to wait for Claude: {}", e))?;
+
+    // Unregister the process from registry on completion
+    let _ = state.process_registry.unregister_process(run_id);
+    println!("[resume_claude_command] Claude process unregistered (run_id: {})", run_id);
+
     if !exit_status.success() {
         return Err(format!(
             "Claude execution failed with exit code: {:?}",
@@ -2169,6 +2308,8 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
         // Frontend routes
         .route("/", get(serve_frontend))
         .route("/index.html", get(serve_frontend))
+        // Health check endpoint
+        .route("/api/health", get(health_check))
         // API routes (REST API equivalent of Tauri commands)
         .route("/api/home", get(get_home_directory))
         .route("/api/browse", get(browse_directory))

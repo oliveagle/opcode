@@ -68,6 +68,8 @@ class NetworkStatusManager {
   private listeners: Set<NetworkStatusCallback> = new Set();
   private statusHistory: Array<{ status: NetworkStatus; timestamp: number }> = [];
   private maxHistoryLength = 50;
+  private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly HEALTH_CHECK_INTERVAL_MS = 3000; // Check every 3 seconds
 
   /**
    * Get current network status
@@ -150,6 +152,68 @@ class NetworkStatusManager {
    */
   reset(): void {
     this.setStatus('disconnected');
+  }
+
+  /**
+   * Start periodic health checks to detect server availability
+   * This enables automatic status detection when server comes online
+   */
+  startHealthCheck(): void {
+    if (this.healthCheckInterval) {
+      return; // Already running
+    }
+
+    const performHealthCheck = async () => {
+      try {
+        const response = await fetch('/api/health', {
+          method: 'GET',
+          cache: 'no-store'
+        });
+
+        if (response.ok) {
+          // Server is available
+          if (this.currentStatus === 'disconnected' || this.currentStatus === 'error') {
+            this.setStatus('connected');
+          }
+        } else {
+          // Server returned an error but is responding
+          if (this.currentStatus === 'disconnected') {
+            this.setStatus('error');
+          }
+        }
+      } catch (error) {
+        // Network error - server is not available
+        if (this.currentStatus === 'connected' || this.currentStatus === 'connecting') {
+          this.setStatus('disconnected');
+        }
+      }
+    };
+
+    // Perform initial health check
+    performHealthCheck();
+
+    // Start periodic checks
+    this.healthCheckInterval = setInterval(performHealthCheck, this.HEALTH_CHECK_INTERVAL_MS);
+
+    console.log('[NetworkStatusManager] Health check started');
+  }
+
+  /**
+   * Stop periodic health checks
+   */
+  stopHealthCheck(): void {
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
+      console.log('[NetworkStatusManager] Health check stopped');
+    }
+  }
+
+  /**
+   * Get health check status
+   */
+  isHealthCheckRunning(): boolean {
+    return this.healthCheckInterval !== null;
   }
 }
 
