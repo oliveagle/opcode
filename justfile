@@ -48,6 +48,30 @@ dev: build-frontend
 test:
     cd src-tauri && cargo test
 
+# Run local integration tests (safe for deployment validation)
+test-local: build-frontend
+    @./dev-tests.sh {{flag}}
+
+# Quick sanity check before deployment
+test-quick:
+    @./dev-tests.sh quick
+
+# Run frontend tests only
+test-frontend:
+    @./dev-tests.sh frontend
+
+# Run backend tests only
+test-backend:
+    @./dev-tests.sh backend
+
+# Test service health
+test-service:
+    @./dev-tests.sh service
+
+# Check git status
+test-git:
+    @./dev-tests.sh git
+
 # Format Rust code
 fmt:
     cd src-tauri && cargo fmt
