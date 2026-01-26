@@ -14,9 +14,6 @@ import {
   Rocket,
   Image as ImageIcon,
   MoreVertical,
-  WifiOff,
-  Loader2,
-  CheckCircle2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -27,7 +24,6 @@ import { FilePicker } from "./FilePicker";
 import { SlashCommandPicker } from "./SlashCommandPicker";
 import { ImagePreview } from "./ImagePreview";
 import { type FileEntry, type SlashCommand } from "@/lib/api";
-import { networkStatusManager, type NetworkStatus } from "@/lib/apiAdapter";
 
 interface FloatingPromptInputProps {
   /**
@@ -232,7 +228,6 @@ const FloatingPromptInputInner = (
   const [isResizing, setIsResizing] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const [networkStatus, setNetworkStatus] = useState<NetworkStatus>('disconnected');
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const expandedTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -259,15 +254,6 @@ const FloatingPromptInputInner = (
         textarea.removeEventListener('blur', handleBlur);
       };
     }
-  }, []);
-
-  // Subscribe to network status changes
-  useEffect(() => {
-    const unsubscribe = networkStatusManager.subscribe((status) => {
-      setNetworkStatus(status);
-    });
-
-    return unsubscribe;
   }, []);
 
   // Expose a method to add images programmatically
@@ -984,49 +970,6 @@ const FloatingPromptInputInner = (
 
   const selectedModelData = MODELS.find(m => m.id === selectedModel) || MODELS[0];
 
-  /**
-   * Get network status indicator props
-   */
-  const getNetworkStatusIndicator = () => {
-    switch (networkStatus) {
-      case 'connected':
-        return {
-          icon: <CheckCircle2 className="h-3.5 w-3.5" />,
-          color: 'text-green-500',
-          bgColor: 'bg-green-500/20',
-          label: 'Connected',
-          dotColor: 'bg-green-500',
-        };
-      case 'connecting':
-        return {
-          icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />,
-          color: 'text-yellow-500',
-          bgColor: 'bg-yellow-500/20',
-          label: 'Connecting...',
-          dotColor: 'bg-yellow-500',
-        };
-      case 'error':
-        return {
-          icon: <WifiOff className="h-3.5 w-3.5" />,
-          color: 'text-red-500',
-          bgColor: 'bg-red-500/20',
-          label: 'Connection error',
-          dotColor: 'bg-red-500',
-        };
-      case 'disconnected':
-      default:
-        return {
-          icon: <WifiOff className="h-3.5 w-3.5" />,
-          color: 'text-muted-foreground',
-          bgColor: 'bg-muted/20',
-          label: 'Disconnected',
-          dotColor: 'bg-muted-foreground',
-        };
-    }
-  };
-
-  const statusInfo = getNetworkStatusIndicator();
-
   return (
     <TooltipProvider>
     <>
@@ -1403,48 +1346,6 @@ const FloatingPromptInputInner = (
               />
 
               </div>
-
-              {/* Network Status Indicator - Right of selectors */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div
-                    className={cn(
-                      "hidden lg:flex items-center gap-1.5 px-2 py-1.5 rounded-md transition-colors",
-                      statusInfo.bgColor
-                    )}
-                  >
-                    {/* Animated dot for status */}
-                    <div className="relative flex items-center justify-center">
-                      <span className={cn("absolute w-2 h-2 rounded-full", statusInfo.dotColor)} />
-                      <span className={cn(
-                        "absolute w-2 h-2 rounded-full animate-ping",
-                        statusInfo.dotColor,
-                        networkStatus === 'connected' && "opacity-75"
-                      )} style={{ animationDuration: '2s' }} />
-                    </div>
-                    <span className={cn("text-xs font-medium", statusInfo.color)}>
-                      {networkStatus === 'connected' ? 'Online' :
-                       networkStatus === 'connecting' ? 'Connecting' :
-                       networkStatus === 'error' ? 'Offline' : 'Offline'}
-                    </span>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="top">
-                  <p className="text-xs font-medium">{statusInfo.label}</p>
-                  {networkStatus === 'connecting' && (
-                    <p className="text-xs text-muted-foreground">Establishing connection...</p>
-                  )}
-                  {networkStatus === 'error' && (
-                    <p className="text-xs text-muted-foreground">Check your connection</p>
-                  )}
-                  {networkStatus === 'disconnected' && (
-                    <p className="text-xs text-muted-foreground">Ready to connect</p>
-                  )}
-                  {networkStatus === 'connected' && (
-                    <p className="text-xs text-muted-foreground">Claude is responding</p>
-                  )}
-                </TooltipContent>
-              </Tooltip>
 
               {/* Prompt Input - Center */}
               <div className="flex-1 relative">

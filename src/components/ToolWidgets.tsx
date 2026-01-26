@@ -672,7 +672,7 @@ export const BashWidget: React.FC<{
           </div>
         )}
       </div>
-      <div className="p-4 space-y-3">
+      <div className="p-0 lg:p-4 space-y-3">
         <code className="text-xs font-mono text-green-400 block">
           $ {command}
         </code>

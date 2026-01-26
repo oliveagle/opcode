@@ -5,6 +5,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { TooltipProvider, TooltipSimple } from '@/components/ui/tooltip-modern';
 import { ProcessMonitorPopover } from '@/components/ProcessMonitorPopover';
 import { api } from '@/lib/api';
+import { cn } from "@/lib/utils";
+import { networkStatusManager, type NetworkStatus } from "@/lib/apiAdapter";
 
 interface CustomTitlebarProps {
   onSettingsClick?: () => void;
@@ -33,6 +35,7 @@ export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [showProcessMonitor, setShowProcessMonitor] = useState(false);
   const [runningProcessCount, setRunningProcessCount] = useState(0);
+  const [networkStatus, setNetworkStatus] = useState<NetworkStatus>('disconnected');
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,6 +54,14 @@ export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showProcessMonitor]);
+
+  // Subscribe to network status
+  useEffect(() => {
+    const unsubscribe = networkStatusManager.subscribe((status) => {
+      setNetworkStatus(status);
+    });
+    return unsubscribe;
+  }, []);
 
   // Fetch process count periodically
   useEffect(() => {
@@ -215,6 +226,33 @@ export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
               )}
             </motion.button>
           </TooltipSimple>
+
+          {/* Network Status Indicator */}
+          {(() => {
+            const statusConfig: Record<NetworkStatus, { color: string; bgColor: string; dotColor: string; label: string }> = {
+              connected: { color: 'text-green-500', bgColor: 'bg-green-500/20', dotColor: 'bg-green-500', label: 'Online' },
+              connecting: { color: 'text-yellow-500', bgColor: 'bg-yellow-500/20', dotColor: 'bg-yellow-500', label: 'Connecting...' },
+              error: { color: 'text-red-500', bgColor: 'bg-red-500/20', dotColor: 'bg-red-500', label: 'Error' },
+              disconnected: { color: 'text-muted-foreground', bgColor: 'bg-muted/20', dotColor: 'bg-muted-foreground', label: 'Offline' },
+            };
+            const config = statusConfig[networkStatus];
+
+            return (
+              <TooltipSimple content={config.label} side="bottom">
+                <div className={cn("flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors", config.bgColor)}>
+                  <div className="relative flex items-center justify-center">
+                    <span className={cn("absolute w-2 h-2 rounded-full", config.dotColor)} />
+                    {networkStatus === 'connected' && (
+                      <span className={cn("absolute w-2 h-2 rounded-full animate-ping opacity-75", config.dotColor)} style={{ animationDuration: '2s' }} />
+                    )}
+                  </div>
+                  <span className={cn("text-xs font-medium", config.color)}>
+                    {networkStatus === 'connected' ? 'Online' : networkStatus === 'connecting' ? 'Connecting' : 'Offline'}
+                  </span>
+                </div>
+              </TooltipSimple>
+            );
+          })()}
         </div>
 
         {/* Visual separator */}
