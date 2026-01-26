@@ -143,12 +143,13 @@ check-health:
     @dev-helpers/check-service.sh 8080
 
 # Ensure service is running (auto-start if needed)
-ensure-service:
-    @dev-helpers/ensure-service.sh 8080
+ensure-service *ARGS:
+    @dev-helpers/ensure-service.sh 8080 {{ARGS}}
 
 # Start development session with automatic service recovery
-# Usage: just dev-session [command]
+# Usage: just dev-service [command]
 # If no command provided, starts interactive shell
+# Includes background monitor that auto-restarts service if it crashes
 dev-service *ARGS:
     @dev-helpers/dev-wrapper.sh 8080 {{ARGS}}
 

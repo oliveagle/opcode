@@ -121,6 +121,15 @@ function AppContent() {
             window.dispatchEvent(new CustomEvent('create-settings-tab'));
           }}
           onAgentsClick={() => {}}
+          onTimelineClick={() => {
+            window.dispatchEvent(new CustomEvent('show-timeline'));
+          }}
+          onCopyClick={() => {
+            window.dispatchEvent(new CustomEvent('show-copy-dialog'));
+          }}
+          onCheckpointSettingsClick={() => {
+            window.dispatchEvent(new CustomEvent('show-checkpoint-settings'));
+          }}
         />
         
         {/* Tab-based interface */}

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings, Minus, Square, X, Bot, BarChart3, FileText, Network, Info, MoreVertical, Activity } from 'lucide-react';
+import { Settings, Minus, Square, X, Bot, BarChart3, FileText, Network, Info, MoreVertical, Activity, Copy, Wrench, GitBranch } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { TooltipProvider, TooltipSimple } from '@/components/ui/tooltip-modern';
 import { ProcessMonitorPopover } from '@/components/ProcessMonitorPopover';
@@ -13,6 +13,9 @@ interface CustomTitlebarProps {
   onClaudeClick?: () => void;
   onMCPClick?: () => void;
   onInfoClick?: () => void;
+  onCopyClick?: () => void;
+  onCheckpointSettingsClick?: () => void;
+  onTimelineClick?: () => void;
 }
 
 export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
@@ -21,7 +24,10 @@ export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
   onUsageClick,
   onClaudeClick,
   onMCPClick,
-  onInfoClick
+  onInfoClick,
+  onCopyClick,
+  onCheckpointSettingsClick,
+  onTimelineClick
 }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -245,6 +251,47 @@ export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
             {isDropdownOpen && (
               <div className="absolute right-0 mt-2 w-48 bg-popover border border-border rounded-lg shadow-lg z-[250]">
                 <div className="py-1">
+                  {onTimelineClick && (
+                    <button
+                      onClick={() => {
+                        onTimelineClick();
+                        setIsDropdownOpen(false);
+                      }}
+                      className="w-full px-4 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground transition-colors flex items-center gap-3"
+                    >
+                      <GitBranch size={14} />
+                      <span>Session Timeline</span>
+                    </button>
+                  )}
+
+                  {onCopyClick && (
+                    <button
+                      onClick={() => {
+                        onCopyClick();
+                        setIsDropdownOpen(false);
+                      }}
+                      className="w-full px-4 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground transition-colors flex items-center gap-3"
+                    >
+                      <Copy size={14} />
+                      <span>Copy Conversation</span>
+                    </button>
+                  )}
+
+                  {onCheckpointSettingsClick && (
+                    <button
+                      onClick={() => {
+                        onCheckpointSettingsClick();
+                        setIsDropdownOpen(false);
+                      }}
+                      className="w-full px-4 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground transition-colors flex items-center gap-3"
+                    >
+                      <Wrench size={14} />
+                      <span>Checkpoint Settings</span>
+                    </button>
+                  )}
+
+                  <div className="border-t border-border my-1" />
+
                   {onClaudeClick && (
                     <button
                       onClick={() => {
@@ -257,7 +304,7 @@ export const CustomTitlebar: React.FC<CustomTitlebarProps> = ({
                       <span>CLAUDE.md</span>
                     </button>
                   )}
-                  
+
                   {onMCPClick && (
                     <button
                       onClick={() => {

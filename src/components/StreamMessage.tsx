@@ -638,9 +638,10 @@ const StreamMessageComponent: React.FC<StreamMessageProps> = ({ message, classNa
     // Result message - render with markdown
     if (message.type === "result") {
       const isError = message.is_error || message.subtype?.includes("error");
-      
+
       return (
         <Card className={cn(
+          "hidden lg:block",
           isError ? "border-destructive/20 bg-destructive/5" : "border-green-500/20 bg-green-500/5",
           className
         )}>

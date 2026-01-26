@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { 
+import {
   Copy,
   ChevronDown,
-  GitBranch,
   ChevronUp,
   X,
   Hash,
@@ -206,6 +205,29 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
     }
     return null;
   }, [session, extractedSessionInfo, projectPath]);
+
+  // Listen for global events from titlebar menu
+  useEffect(() => {
+    const handleCopyDialog = () => {
+      setCopyPopoverOpen(true);
+    };
+    const handleCheckpointSettings = () => {
+      setShowSettings(true);
+    };
+    const handleTimeline = () => {
+      setShowTimeline(true);
+    };
+
+    window.addEventListener('show-copy-dialog', handleCopyDialog);
+    window.addEventListener('show-checkpoint-settings', handleCheckpointSettings);
+    window.addEventListener('show-timeline', handleTimeline);
+
+    return () => {
+      window.removeEventListener('show-copy-dialog', handleCopyDialog);
+      window.removeEventListener('show-checkpoint-settings', handleCheckpointSettings);
+      window.removeEventListener('show-timeline', handleTimeline);
+    };
+  }, []);
 
   // Filter out messages that shouldn't be displayed
   const displayableMessages = useMemo(() => {
@@ -1560,8 +1582,52 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
               projectPath={projectPath}
               extraMenuItems={
                 <>
-                  {effectiveSession && (
-                    <TooltipSimple content="Session Timeline" side="top">
+                  <div className="hidden lg:flex items-center gap-0.5 shrink-0">
+                    {messages.length > 0 && (
+                      <Popover
+                        trigger={
+                          <TooltipSimple content="Copy conversation" side="top">
+                            <motion.div
+                              whileTap={{ scale: 0.97 }}
+                              transition={{ duration: 0.15 }}
+                            >
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-9 w-9 text-muted-foreground hover:text-foreground"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                              </Button>
+                            </motion.div>
+                          </TooltipSimple>
+                        }
+                        content={
+                          <div className="w-44 p-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={handleCopyAsMarkdown}
+                              className="w-full justify-start text-xs"
+                            >
+                              Copy as Markdown
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={handleCopyAsJsonl}
+                              className="w-full justify-start text-xs"
+                            >
+                              Copy as JSONL
+                            </Button>
+                          </div>
+                        }
+                        open={copyPopoverOpen}
+                        onOpenChange={setCopyPopoverOpen}
+                        side="top"
+                        align="end"
+                      />
+                    )}
+                    <TooltipSimple content="Checkpoint Settings" side="top">
                       <motion.div
                         whileTap={{ scale: 0.97 }}
                         transition={{ duration: 0.15 }}
@@ -1569,73 +1635,14 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={() => setShowTimeline(!showTimeline)}
-                          className="h-9 w-9 text-muted-foreground hover:text-foreground"
+                          onClick={() => setShowSettings(!showSettings)}
+                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
                         >
-                          <GitBranch className={cn("h-3.5 w-3.5", showTimeline && "text-primary")} />
+                          <Wrench className={cn("h-3.5 w-3.5", showSettings && "text-primary")} />
                         </Button>
                       </motion.div>
                     </TooltipSimple>
-                  )}
-                  {messages.length > 0 && (
-                    <Popover
-                      trigger={
-                        <TooltipSimple content="Copy conversation" side="top">
-                          <motion.div
-                            whileTap={{ scale: 0.97 }}
-                            transition={{ duration: 0.15 }}
-                          >
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-9 w-9 text-muted-foreground hover:text-foreground"
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                            </Button>
-                          </motion.div>
-                        </TooltipSimple>
-                      }
-                      content={
-                        <div className="w-44 p-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={handleCopyAsMarkdown}
-                            className="w-full justify-start text-xs"
-                          >
-                            Copy as Markdown
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={handleCopyAsJsonl}
-                            className="w-full justify-start text-xs"
-                          >
-                            Copy as JSONL
-                          </Button>
-                        </div>
-                      }
-                      open={copyPopoverOpen}
-                      onOpenChange={setCopyPopoverOpen}
-                      side="top"
-                      align="end"
-                    />
-                  )}
-                  <TooltipSimple content="Checkpoint Settings" side="top">
-                    <motion.div
-                      whileTap={{ scale: 0.97 }}
-                      transition={{ duration: 0.15 }}
-                    >
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setShowSettings(!showSettings)}
-                        className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                      >
-                        <Wrench className={cn("h-3.5 w-3.5", showSettings && "text-primary")} />
-                      </Button>
-                    </motion.div>
-                  </TooltipSimple>
+                  </div>
                 </>
               }
             />
