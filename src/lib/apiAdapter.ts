@@ -284,8 +284,10 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
     // Send request when connection is ready
     const checkAndSend = () => {
       if (session.ws.readyState === WebSocket.OPEN) {
-        // Generate UUID for idempotency
-        const uuid = crypto.randomUUID();
+        // Generate UUID for idempotency (with fallback for browsers without crypto.randomUUID)
+        const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `uuid-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         const request = {
           uuid: uuid,
           command_type: command.replace('_claude_code', ''),

@@ -1144,6 +1144,41 @@ async fn get_usage(Query(params): Query<std::collections::HashMap<String, String
     }
 }
 
+/// Get usage statistics by date range
+async fn get_usage_by_date_range(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl axum::response::IntoResponse {
+    use crate::commands::usage::get_usage_by_date_range;
+
+    let start_date = params.get("startDate").cloned().unwrap_or_default();
+    let end_date = params.get("endDate").cloned().unwrap_or_default();
+
+    if start_date.is_empty() || end_date.is_empty() {
+        return Json(ApiResponse::error("startDate and endDate parameters are required".to_string()));
+    }
+
+    match get_usage_by_date_range(start_date, end_date) {
+        Ok(stats) => Json(ApiResponse::success(stats)),
+        Err(e) => Json(ApiResponse::error(format!("Failed to get usage by date range: {}", e))),
+    }
+}
+
+/// Get session statistics
+async fn get_session_stats(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl axum::response::IntoResponse {
+    use crate::commands::usage::get_session_stats;
+
+    let since = params.get("since").cloned();
+    let until = params.get("until").cloned();
+    let order = params.get("order").cloned();
+
+    match get_session_stats(since, until, order) {
+        Ok(stats) => Json(ApiResponse::success(stats)),
+        Err(e) => Json(ApiResponse::error(format!("Failed to get session stats: {}", e))),
+    }
+}
+
 /// Get user's home directory
 async fn get_home_directory() -> impl axum::response::IntoResponse {
     let home = dirs::home_dir()
@@ -2148,6 +2183,8 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
         .route("/api/agents/runs/metrics", get(list_agent_runs_with_metrics))
         // Usage API
         .route("/api/usage", get(get_usage))
+        .route("/api/usage/range", get(get_usage_by_date_range))
+        .route("/api/usage/sessions", get(get_session_stats))
         // Storage API
         .route("/api/storage/tables", get(storage_list_tables))
         .route("/api/storage/tables/{tableName}", get(storage_read_table))
