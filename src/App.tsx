@@ -88,6 +88,16 @@ function AppContent() {
   // Initialize web mode compatibility on mount
   useEffect(() => {
     initializeWebMode();
+
+    // Log screen width for debugging mobile responsive issues
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    console.log('📱 [Mobile Debug] Screen size:', {
+      width: `${width}px (${width >= 1024 ? 'desktop' : width >= 640 ? 'tablet' : 'mobile'})`,
+      height: `${height}px`,
+      userAgent: navigator.userAgent,
+      breakpoint: width >= 1024 ? 'lg (>=1024px)' : width >= 640 ? 'sm (>=640px)' : 'base (<640px)'
+    });
   }, []);
 
   // Load projects on mount when in projects view
