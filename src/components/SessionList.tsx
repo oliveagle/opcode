@@ -102,7 +102,7 @@ export const SessionList: React.FC<SessionListProps> = ({
             >
               <Card
                 className={cn(
-                  "p-3 hover:bg-accent/50 transition-all duration-200 cursor-pointer group h-full",
+                  "p-3 hover:bg-accent/50 transition-all duration-200 cursor-pointer group h-full border-0 sm:border sm:border-border",
                   session.todo_data && "bg-primary/5"
                 )}
                 onClick={() => {
