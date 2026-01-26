@@ -16,49 +16,42 @@
 
 set -e  # Exit on error
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
 # Test counters
 TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_TOTAL=0
 
 # ============================================================================
-# Helper Functions
+# Helper Functions (No colors - plain text for AI parsing)
 # ============================================================================
 
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo "[INFO] $1"
 }
 
 log_success() {
-    echo -e "${GREEN}[PASS]${NC} $1"
+    echo "[PASS] $1"
     ((TESTS_PASSED++))
     ((TESTS_TOTAL++))
 }
 
 log_fail() {
-    echo -e "${RED}[FAIL]${NC} $1"
+    echo "[FAIL] $1"
     ((TESTS_FAILED++))
     ((TESTS_TOTAL++))
 }
 
 log_section() {
     echo ""
-    echo -e "${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}$1${NC}"
-    echo -e "${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
+    echo "============================================================"
+    echo "$1"
+    echo "============================================================"
     echo ""
 }
 
 log_header() {
     echo ""
-    echo -e "${BLUE}▶ $1${NC}"
+    echo ">> $1"
 }
 
 # ============================================================================
@@ -232,16 +225,16 @@ run_quick_test() {
 print_summary() {
     log_section "TEST SUMMARY"
 
-    echo -e "Total Tests: ${TESTS_TOTAL}"
-    echo -e "${GREEN}Passed: ${TESTS_PASSED}${NC}"
-    echo -e "${RED}Failed: ${TESTS_FAILED}${NC}"
+    echo "Total Tests: ${TESTS_TOTAL}"
+    echo "Passed: ${TESTS_PASSED}"
+    echo "Failed: ${TESTS_FAILED}"
     echo ""
 
     if [ $TESTS_FAILED -eq 0 ]; then
-        echo -e "${GREEN}✅ All tests passed! Safe to deploy.${NC}"
+        echo "All tests passed! Safe to deploy."
         return 0
     else
-        echo -e "${YELLOW}⚠️  Some tests failed. Please review before deploying.${NC}"
+        echo "Some tests failed. Please review before deploying."
         return 1
     fi
 }
@@ -254,11 +247,9 @@ main() {
     local TEST_MODE=${1:-"all"}
 
     echo ""
-    echo -e "${BLUE}╔═══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║                                                               ║${NC}"
-    echo -e "${BLUE}║         🔧 Opcode Local Integration Test Suite 🔧           ║${NC}"
-    echo -e "${BLUE}║                                                               ║${NC}"
-    echo -e "${BLUE}╚═══════════════════════════════════════════════════════════════╝${NC}"
+    echo "============================================================"
+    echo "  Opcode Local Integration Test Suite"
+    echo "============================================================"
     echo ""
 
     case $TEST_MODE in
