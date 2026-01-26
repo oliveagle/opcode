@@ -1344,6 +1344,104 @@ async fn cancel_claude_execution(Path(session_id): Path<String>) -> Json<ApiResp
     Json(ApiResponse::success(()))
 }
 
+/// Store a message in the message queue for persistence
+fn store_message_in_queue(
+    db_path: &std::path::PathBuf,
+    session_id: &str,
+    command_type: &str,
+    project_path: &str,
+    prompt: &str,
+    model: &str,
+) -> Result<i64, String> {
+    let conn = get_db_connection(db_path)?;
+
+    conn.execute(
+        "INSERT INTO message_queue (session_id, command_type, project_path, prompt, model, status)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'pending')",
+        &[session_id, command_type, project_path, prompt, model],
+    )
+    .map_err(|e| format!("Failed to store message in queue: {}", e))?;
+
+    let message_id = conn.last_insert_rowid();
+    println!(
+        "[MESSAGE_QUEUE] Stored message #{} in queue (session: {}, type: {})",
+        message_id, session_id, command_type
+    );
+
+    Ok(message_id)
+}
+
+/// Update message status in the queue
+fn update_message_status(
+    db_path: &std::path::PathBuf,
+    message_id: i64,
+    status: &str,
+    error: Option<&str>,
+) -> Result<(), String> {
+    let conn = get_db_connection(db_path)?;
+
+    let error_sql = if let Some(err_msg) = error {
+        format!("', error = '{}'", err_msg.replace("'", "''"))
+    } else {
+        String::new()
+    };
+
+    conn.execute(
+        &format!(
+            "UPDATE message_queue SET status = '{}', processed_at = strftime('%s', 'now'){} WHERE id = {}",
+            status, error_sql, message_id
+        ),
+        [],
+    )
+    .map_err(|e| format!("Failed to update message status: {}", e))?;
+
+    println!("[MESSAGE_QUEUE] Updated message #{} to status: {}", message_id, status);
+    Ok(())
+}
+
+/// Get pending messages from the queue
+fn get_pending_messages(db_path: &std::path::PathBuf) -> Result<Vec<MessageQueueItem>, String> {
+    let conn = get_db_connection(db_path)?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, session_id, command_type, project_path, prompt, model, created_at
+             FROM message_queue
+             WHERE status = 'pending'
+             ORDER BY created_at ASC",
+        )
+        .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+    let messages = stmt
+        .query_map([], |row| {
+            Ok(MessageQueueItem {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                command_type: row.get(2)?,
+                project_path: row.get(3)?,
+                prompt: row.get(4)?,
+                model: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })
+        .map_err(|e| format!("Failed to query pending messages: {}", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to collect messages: {}", e))?;
+
+    Ok(messages)
+}
+
+#[derive(Debug)]
+struct MessageQueueItem {
+    id: i64,
+    session_id: String,
+    command_type: String,
+    project_path: String,
+    prompt: String,
+    model: String,
+    created_at: i64,
+}
+
 /// Get Claude session output
 async fn get_claude_session_output(Path(session_id): Path<String>) -> Json<ApiResponse<String>> {
     // In web mode, output is streamed via WebSocket, not stored
@@ -1424,6 +1522,26 @@ async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
                         println!("[TRACE] Project path: {}", request.project_path);
                         println!("[TRACE] Prompt length: {} chars", request.prompt.len());
 
+                        // Store message in database for persistence
+                        let model = request.model.clone().unwrap_or_default();
+                        let message_id = match store_message_in_queue(
+                            &state.db_path,
+                            &session_id,
+                            &request.command_type,
+                            &request.project_path,
+                            &request.prompt,
+                            &model,
+                        ) {
+                            Ok(id) => id,
+                            Err(e) => {
+                                println!("[ERROR] Failed to store message in queue: {}", e);
+                                // Continue anyway - don't block message if storage fails
+                                0
+                            }
+                        };
+
+                        println!("[TRACE] Message stored with ID: {}", message_id);
+
                         // Execute Claude command based on request type
                         let session_id_clone = session_id.clone();
                         let state_clone = state.clone();
@@ -1482,6 +1600,19 @@ async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
                                 "[TRACE] Command execution finished with result: {:?}",
                                 result
                             );
+
+                            // Update message status in queue
+                            if message_id > 0 {
+                                let status = match result {
+                                    Ok(_) => "completed",
+                                    Err(_) => "failed",
+                                };
+                                let error = match &result {
+                                    Err(e) => Some(e.as_str()),
+                                    _ => None,
+                                };
+                                let _ = update_message_status(&state_clone.db_path, message_id, status, error);
+                            }
 
                             // Send completion message
                             let sender_opt = state_clone
@@ -2050,6 +2181,42 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
                     before_count,
                     after_count
                 );
+            }
+        }
+    });
+
+    // Handle pending messages from previous server run
+    let recovery_state = state.clone();
+    tokio::spawn(async move {
+        // Wait a bit for server to fully start
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+        println!("[MESSAGE_RECOVERY] Checking for pending messages from previous run...");
+        match get_pending_messages(&recovery_state.db_path) {
+            Ok(pending) => {
+                if pending.is_empty() {
+                    println!("[MESSAGE_RECOVERY] No pending messages found");
+                } else {
+                    println!(
+                        "[MESSAGE_RECOVERY] Found {} pending message(s) from previous run",
+                        pending.len()
+                    );
+
+                    // Mark all pending messages as failed due to server restart
+                    for msg in &pending {
+                        let _ = update_message_status(
+                            &recovery_state.db_path,
+                            msg.id,
+                            "failed",
+                            Some("Server restarted before message could be processed"),
+                        );
+                    }
+
+                    println!("[MESSAGE_RECOVERY] Marked {} message(s) as failed", pending.len());
+                }
+            }
+            Err(e) => {
+                println!("[MESSAGE_RECOVERY] Failed to check pending messages: {}", e);
             }
         }
     });
