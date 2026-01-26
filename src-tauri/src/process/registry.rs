@@ -245,8 +245,23 @@ impl ProcessRegistry {
             if let Some(handle) = processes.get(&run_id) {
                 (handle.info.pid, handle.child.clone())
             } else {
-                warn!("Process {} not found in registry", run_id);
-                return Ok(false); // Process not found
+                // Process not found in registry - this could be a discovered process
+                // For discovered processes, run_id equals PID, so try killing by run_id as PID
+                warn!("Process {} not found in registry, attempting system kill by PID", run_id);
+                match self.kill_process_by_pid(run_id, run_id as u32) {
+                    Ok(true) => {
+                        info!("Successfully killed discovered process {} via system kill", run_id);
+                        return Ok(true);
+                    }
+                    Ok(false) => {
+                        warn!("Failed to kill process {} via system kill", run_id);
+                        return Ok(false);
+                    }
+                    Err(e) => {
+                        error!("Error killing process {}: {}", run_id, e);
+                        return Ok(false);
+                    }
+                }
             }
         };
 

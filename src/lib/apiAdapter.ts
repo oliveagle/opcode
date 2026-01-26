@@ -488,6 +488,7 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
           prompt: params?.prompt || '',
           model: params?.model || 'claude-3-5-sonnet-20241022',
           session_id: sessionId,
+          images: params?.images || [],
         };
         console.log(`[TRACE] Sending WebSocket request with UUID:`, request);
         session.ws.send(JSON.stringify(request));
@@ -563,7 +564,7 @@ export async function apiCall<T>(command: string, params?: any): Promise<T> {
     method = 'POST';
   } else if (command.startsWith('update_') || command.startsWith('save_') || command.startsWith('set_')) {
     method = 'PUT';
-  } else if (command.startsWith('delete_') || command.startsWith('remove_')) {
+  } else if (command.startsWith('delete_') || command.startsWith('remove_') || command.startsWith('kill_')) {
     method = 'DELETE';
   }
   

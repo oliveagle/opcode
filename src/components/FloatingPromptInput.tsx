@@ -29,7 +29,7 @@ interface FloatingPromptInputProps {
   /**
    * Callback when prompt is sent
    */
-  onSend: (prompt: string, model: "sonnet" | "opus") => void;
+  onSend: (prompt: string, model: "sonnet" | "opus", images: Array<{ id: string; data: string }>) => void;
   /**
    * Whether the input is loading
    */
@@ -722,7 +722,7 @@ const FloatingPromptInputInner = (
         finalPrompt = `${finalPrompt}.\n\n${thinkingMode.phrase}.`;
       }
 
-      onSend(finalPrompt, selectedModel);
+      onSend(finalPrompt, selectedModel, embeddedImages);
       setPrompt("");
       setEmbeddedImages([]);
       setTextareaHeight(48); // Reset height after sending
@@ -988,7 +988,7 @@ const FloatingPromptInputInner = (
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.15 }}
-              className="bg-background border border-border rounded-lg shadow-lg w-full max-w-2xl p-4 space-y-4"
+              className="bg-background border border-border rounded-lg shadow-lg w-full max-w-2xl p-1 sm:p-4 space-y-4"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
@@ -1208,7 +1208,7 @@ const FloatingPromptInputInner = (
             />
           )}
 
-          <div className="p-2 lg:p-3">
+          <div className="p-2">
             <div className="flex items-end gap-2 lg:gap-2 gap-1 w-full">
               {/* Model & Thinking Mode Selectors - Left side, hidden on mobile */}
               <div className="hidden lg:flex items-center gap-1 shrink-0 lg:mb-1 mb-0.5">

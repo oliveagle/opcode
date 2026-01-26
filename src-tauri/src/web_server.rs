@@ -17,6 +17,9 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use which;
 
+// Import base64 Engine trait for image decoding
+use base64::Engine;
+
 // Import storage types
 use crate::commands::storage::{TableData, TableInfo};
 
@@ -91,6 +94,62 @@ pub struct ClaudeExecutionRequest {
     pub model: Option<String>,
     pub session_id: Option<String>,
     pub command_type: String, // "execute", "continue", or "resume"
+    pub images: Option<Vec<ImageData>>, // Base64 encoded images
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ImageData {
+    pub id: String,
+    pub data: String, // Base64 encoded image data
+}
+
+/// Save base64 image data to a temporary file and return the file path
+async fn save_image_to_temp_file(image: &ImageData) -> Result<std::path::PathBuf, String> {
+    // Extract mime type from data URL
+    let mime_type = image.data.split(',').next()
+        .and_then(|header| header.strip_prefix("data:"))
+        .and_then(|header| header.strip_suffix(';'))
+        .unwrap_or("image/png");
+
+    // Get file extension from mime type
+    let extension = match mime_type {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        "image/svg+xml" => "svg",
+        _ => "png",
+    };
+
+    // Create temp file
+    let temp_dir = std::env::temp_dir();
+    let file_name = format!("opcode_image_{}.{}", image.id, extension);
+    let file_path = temp_dir.join(&file_name);
+
+    // Decode base64 and write to file
+    let base64_data = image.data.split(',').last()
+        .ok_or_else(|| "Invalid base64 data URL format")?;
+
+    let image_data = base64::engine::general_purpose::STANDARD
+        .decode(base64_data)
+        .map_err(|e| format!("Failed to decode base64 image: {}", e))?;
+
+    tokio::fs::write(&file_path, &image_data)
+        .await
+        .map_err(|e| format!("Failed to write temp image file: {}", e))?;
+
+    println!("[ImageUpload] Saved image to temp file: {:?}", file_path);
+    Ok(file_path)
+}
+
+/// Clean up temporary image file
+async fn cleanup_temp_image(file_path: &std::path::PathBuf) {
+    if let Err(e) = tokio::fs::remove_file(file_path).await {
+        println!("[ImageUpload] Failed to remove temp image file: {:?}", e);
+    } else {
+        println!("[ImageUpload] Cleaned up temp image file: {:?}", file_path);
+    }
 }
 
 #[derive(Deserialize)]
@@ -1698,6 +1757,7 @@ async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
                                         request.model.unwrap_or_default(),
                                         session_id_clone.clone(),
                                         state_clone.clone(),
+                                        request.images,
                                     )
                                     .await
                                 }
@@ -1709,6 +1769,7 @@ async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
                                         request.model.unwrap_or_default(),
                                         session_id_clone.clone(),
                                         state_clone.clone(),
+                                        request.images,
                                     )
                                     .await
                                 }
@@ -1721,6 +1782,7 @@ async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
                                         request.model.unwrap_or_default(),
                                         session_id_clone.clone(),
                                         state_clone.clone(),
+                                        request.images,
                                     )
                                     .await
                                 }
@@ -1827,6 +1889,7 @@ async fn execute_claude_command(
     model: String,
     session_id: String,
     state: AppState,
+    images: Option<Vec<ImageData>>,
 ) -> Result<(), String> {
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
@@ -1836,6 +1899,14 @@ async fn execute_claude_command(
     println!("[TRACE]   prompt length: {} chars", prompt.len());
     println!("[TRACE]   model: {}", model);
     println!("[TRACE]   session_id: {}", session_id);
+    if let Some(ref imgs) = images {
+        println!("[TRACE]   images: {} image(s) provided", imgs.len());
+        for (i, img) in imgs.iter().enumerate() {
+            println!("[TRACE]   Image {}: id={}, data length={}", i, img.id, img.data.len());
+        }
+    } else {
+        println!("[TRACE]   images: none");
+    }
 
     // Check for base64 image data in the prompt
     let base64_image_regex = regex::Regex::new(r#"@"data:image/[^"]+""#).unwrap();
@@ -1846,14 +1917,27 @@ async fn execute_claude_command(
         println!("[TRACE] Found {} image(s) in prompt", image_count);
     }
 
+    // Check if we have images from the request
+    let has_request_images = images.is_some() && images.as_ref().unwrap().len() > 0;
+    let total_images = if has_request_images {
+        image_count + images.as_ref().unwrap().len()
+    } else {
+        image_count
+    };
+
     // Send initial message
     println!("[TRACE] Sending initial start message");
+    let start_message = if total_images > 0 {
+        format!("Starting Claude execution with {} image(s)...", total_images)
+    } else {
+        "Starting Claude execution...".to_string()
+    };
     send_to_session(
         &state,
         &session_id,
         json!({
             "type": "start",
-            "message": "Starting Claude execution..."
+            "message": start_message
         })
         .to_string(),
     )
@@ -1868,20 +1952,41 @@ async fn execute_claude_command(
     })?;
     println!("[TRACE] Found Claude binary: {}", claude_path);
 
+    // Save images to temp files and collect their paths
+    let mut temp_image_paths: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(ref image_list) = images {
+        for image in image_list {
+            match save_image_to_temp_file(image).await {
+                Ok(path) => temp_image_paths.push(path),
+                Err(e) => {
+                    println!("[ImageUpload] Failed to save image {}: {}", image.id, e);
+                    // Continue without this image
+                }
+            }
+        }
+    }
+
     // Create Claude command
     println!("[TRACE] Creating Claude command...");
     let mut cmd = Command::new(&claude_path);
-    let args = [
-        "-p",
-        &prompt,
-        "--model",
-        &model,
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--dangerously-skip-permissions",
+    let mut args: Vec<String> = vec![
+        "-p".to_string(),
+        prompt.clone(),
+        "--model".to_string(),
+        model.clone(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+        "--verbose".to_string(),
+        "--dangerously-skip-permissions".to_string(),
     ];
-    cmd.args(args);
+
+    // Add --attach flags for each image
+    for image_path in &temp_image_paths {
+        args.push("--attach".to_string());
+        args.push(image_path.to_string_lossy().into_owned());
+    }
+
+    cmd.args(&args);
     cmd.current_dir(&project_path);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -1964,21 +2069,16 @@ async fn execute_claude_command(
         exit_status
     );
 
+    // Clean up temp image files
+    for image_path in &temp_image_paths {
+        cleanup_temp_image(image_path).await;
+    }
+
     if !exit_status.success() {
-        let mut error = format!(
+        let error = format!(
             "Claude execution failed with exit code: {:?}",
             exit_status.code()
         );
-
-        // Add more context if images were detected
-        if has_images {
-            error = format!(
-                "{}\n\nNote: Your prompt contained {} embedded image(s). \
-                Images may not be supported in web mode command-line execution. \
-                Please try again without images, or use the desktop app for image support.",
-                error, image_count
-            );
-        }
 
         println!("[TRACE] Claude execution failed: {}", error);
         return Err(error);
@@ -1994,16 +2094,25 @@ async fn continue_claude_command(
     model: String,
     session_id: String,
     state: AppState,
+    images: Option<Vec<ImageData>>,
 ) -> Result<(), String> {
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
+
+    // Count images
+    let image_count = images.as_ref().map_or(0, |imgs| imgs.len());
+    let start_message = if image_count > 0 {
+        format!("Continuing Claude session with {} image(s)...", image_count)
+    } else {
+        "Continuing Claude session...".to_string()
+    };
 
     send_to_session(
         &state,
         &session_id,
         json!({
             "type": "start",
-            "message": "Continuing Claude session..."
+            "message": start_message
         })
         .to_string(),
     )
@@ -2013,19 +2122,40 @@ async fn continue_claude_command(
     let claude_path =
         find_claude_binary_web().map_err(|e| format!("Claude binary not found: {}", e))?;
 
+    // Save images to temp files and collect their paths
+    let mut temp_image_paths: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(ref image_list) = images {
+        for image in image_list {
+            match save_image_to_temp_file(image).await {
+                Ok(path) => temp_image_paths.push(path),
+                Err(e) => {
+                    println!("[ImageUpload] Failed to save image {}: {}", image.id, e);
+                }
+            }
+        }
+    }
+
     // Create continue command
     let mut cmd = Command::new(&claude_path);
-    cmd.args([
-        "-c", // Continue flag
-        "-p",
-        &prompt,
-        "--model",
-        &model,
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--dangerously-skip-permissions",
-    ]);
+    let mut args: Vec<String> = vec![
+        "-c".to_string(), // Continue flag
+        "-p".to_string(),
+        prompt.clone(),
+        "--model".to_string(),
+        model.clone(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+        "--verbose".to_string(),
+        "--dangerously-skip-permissions".to_string(),
+    ];
+
+    // Add --attach flags for each image
+    for image_path in &temp_image_paths {
+        args.push("--attach".to_string());
+        args.push(image_path.to_string_lossy().into_owned());
+    }
+
+    cmd.args(&args);
     cmd.current_dir(&project_path);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -2077,6 +2207,11 @@ async fn continue_claude_command(
     let _ = state.process_registry.unregister_process(run_id);
     println!("[TRACE] continue_claude_command: Claude process unregistered (run_id: {})", run_id);
 
+    // Clean up temp image files
+    for image_path in &temp_image_paths {
+        cleanup_temp_image(image_path).await;
+    }
+
     if !exit_status.success() {
         return Err(format!(
             "Claude execution failed with exit code: {:?}",
@@ -2094,21 +2229,22 @@ async fn resume_claude_command(
     model: String,
     session_id: String,
     state: AppState,
+    images: Option<Vec<ImageData>>,
 ) -> Result<(), String> {
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
 
-    println!("[resume_claude_command] Starting with project_path: {}, claude_session_id: {}, prompt: {}, model: {}", 
+    println!("[resume_claude_command] Starting with project_path: {}, claude_session_id: {}, prompt: {}, model: {}",
              project_path, claude_session_id, prompt, model);
 
     // Convert agent-xxx format to real session UUID if needed
     let real_session_id = if claude_session_id.starts_with("agent-") {
         let agent_id = &claude_session_id[6..];
-        let agent_file_path = format!("{}/agent-{}.jsonl", 
+        let agent_file_path = format!("{}/agent-{}.jsonl",
             project_path.trim_end_matches('/'),
             agent_id);
         println!("[resume_claude_command] Looking for agent session file: {}", agent_file_path);
-        
+
         if let Ok(content) = tokio::fs::read_to_string(&agent_file_path).await {
             if let Some(session_start) = content.find("\"sessionId\":\"") {
                 let session_part = &content[session_start + 13..];
@@ -2125,11 +2261,11 @@ async fn resume_claude_command(
         } else if let Some(home_dir) = dirs::home_dir() {
             let project_name = project_path.trim_start_matches('/');
             let project_dir = project_name.replace('/', "-").replace("\\", "-");
-            let alt_path = format!("{}/.claude/projects/{}/{}.jsonl", 
+            let alt_path = format!("{}/.claude/projects/{}/{}.jsonl",
                 home_dir.display(),
                 project_dir,
                 claude_session_id);
-            
+
             if let Ok(content) = tokio::fs::read_to_string(&alt_path).await {
                 if let Some(session_start) = content.find("\"sessionId\":\"") {
                     let session_part = &content[session_start + 13..];
@@ -2153,12 +2289,20 @@ async fn resume_claude_command(
         claude_session_id
     };
 
+    // Count images
+    let image_count = images.as_ref().map_or(0, |imgs| imgs.len());
+    let start_message = if image_count > 0 {
+        format!("Resuming Claude session with {} image(s)...", image_count)
+    } else {
+        "Resuming Claude session...".to_string()
+    };
+
     send_to_session(
         &state,
         &session_id,
         json!({
             "type": "start",
-            "message": "Resuming Claude session..."
+            "message": start_message
         })
         .to_string(),
     )
@@ -2173,22 +2317,42 @@ async fn resume_claude_command(
         claude_path
     );
 
+    // Save images to temp files and collect their paths
+    let mut temp_image_paths: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(ref image_list) = images {
+        for image in image_list {
+            match save_image_to_temp_file(image).await {
+                Ok(path) => temp_image_paths.push(path),
+                Err(e) => {
+                    println!("[ImageUpload] Failed to save image {}: {}", image.id, e);
+                }
+            }
+        }
+    }
+
     // Create resume command
     println!("[resume_claude_command] Creating command...");
     let mut cmd = Command::new(&claude_path);
-    let args = [
-        "--resume",
-        &real_session_id,
-        "-p",
-        &prompt,
-        "--model",
-        &model,
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--dangerously-skip-permissions",
+    let mut args: Vec<String> = vec![
+        "--resume".to_string(),
+        real_session_id.clone(),
+        "-p".to_string(),
+        prompt.clone(),
+        "--model".to_string(),
+        model.clone(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+        "--verbose".to_string(),
+        "--dangerously-skip-permissions".to_string(),
     ];
-    cmd.args(args);
+
+    // Add --attach flags for each image
+    for image_path in &temp_image_paths {
+        args.push("--attach".to_string());
+        args.push(image_path.to_string_lossy().into_owned());
+    }
+
+    cmd.args(&args);
     cmd.current_dir(&project_path);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -2249,6 +2413,11 @@ async fn resume_claude_command(
     // Unregister the process from registry on completion
     let _ = state.process_registry.unregister_process(run_id);
     println!("[resume_claude_command] Claude process unregistered (run_id: {})", run_id);
+
+    // Clean up temp image files
+    for image_path in &temp_image_paths {
+        cleanup_temp_image(image_path).await;
+    }
 
     if !exit_status.success() {
         return Err(format!(
@@ -2322,6 +2491,7 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
         .route("/api/agents/{id}", agent_router())
         .route("/api/agents/runs", agent_runs_router())
         .route("/api/agents/runs/metrics", get(list_agent_runs_with_metrics))
+        .route("/api/agents/sessions/{runId}/kill", post(kill_agent_session_web).delete(kill_agent_session_web))
         // Usage API
         .route("/api/usage", get(get_usage))
         .route("/api/usage/range", get(get_usage_by_date_range))
@@ -2581,6 +2751,73 @@ async fn kill_process_web(
         Ok(killed) => Json(ApiResponse::success(killed)),
         Err(e) => Json(ApiResponse::<bool>::error(e)),
     }
+}
+
+/// Kill a running agent session
+async fn kill_agent_session_web(
+    Path(run_id): Path<i64>,
+    AxumState(state): AxumState<AppState>,
+) -> impl axum::response::IntoResponse {
+    println!("[kill_agent_session] Attempting to kill agent session {}", run_id);
+
+    // First try to kill using the process registry
+    let killed_via_registry = match state.process_registry.kill_process(run_id).await {
+        Ok(success) => {
+            if success {
+                println!("[kill_agent_session] Successfully killed process {} via registry", run_id);
+                true
+            } else {
+                println!("[kill_agent_session] Process {} not found in registry", run_id);
+                false
+            }
+        }
+        Err(e) => {
+            println!("[kill_agent_session] Failed to kill process {} via registry: {}", run_id, e);
+            false
+        }
+    };
+
+    // If registry kill didn't work, try fallback with PID from database
+    if !killed_via_registry {
+        let conn = match get_db_connection(&state.db_path) {
+            Ok(c) => c,
+            Err(e) => return Json(ApiResponse::<bool>::error(format!("Failed to connect to database: {}", e))),
+        };
+
+        let pid_result = conn.query_row(
+            "SELECT pid FROM agent_runs WHERE id = ?1 AND status = 'running'",
+            [run_id],
+            |row| row.get::<_, Option<i64>>(0),
+        ).ok().flatten();
+
+        if let Some(pid) = pid_result {
+            println!("[kill_agent_session] Attempting fallback kill for PID {} from database", pid);
+            let _ = state.process_registry.kill_process_by_pid(run_id, pid as u32);
+        }
+    }
+
+    // Update the database to mark as cancelled
+    let conn = match get_db_connection(&state.db_path) {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::<bool>::error(format!("Failed to connect to database: {}", e))),
+    };
+
+    let updated = match conn.execute(
+        "UPDATE agent_runs SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP WHERE id = ?1 AND status = 'running'",
+        [run_id],
+    ) {
+        Ok(n) => n,
+        Err(e) => return Json(ApiResponse::<bool>::error(format!("Failed to update database: {}", e))),
+    };
+
+    let success = updated > 0 || killed_via_registry;
+    if success {
+        println!("[kill_agent_session] Successfully cancelled agent session {}", run_id);
+    } else {
+        println!("[kill_agent_session] Agent session {} was not found or already completed", run_id);
+    }
+
+    Json(ApiResponse::success(success))
 }
 
 /// Kill all processes

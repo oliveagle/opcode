@@ -49,12 +49,13 @@ COPY src-tauri/Cargo.lock ./src-tauri/Cargo.lock
 COPY src-tauri/build.rs ./src-tauri/
 COPY src-tauri/tauri.conf.json ./src-tauri/
 COPY .cargo ./src-tauri/.cargo
+COPY src-tauri/icons ./src-tauri/icons
 
 # Copy source code
 COPY src-tauri/src ./src-tauri/src
 
 # Copy frontend build from previous stage
-COPY --from=frontend-builder /build/dist ./src-tauri/dist
+COPY --from=frontend-builder /build/dist ./dist
 
 # Build the application (both binaries)
 WORKDIR /build/src-tauri

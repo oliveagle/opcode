@@ -114,7 +114,7 @@ const StreamMessageComponent: React.FC<StreamMessageProps> = ({ message, classNa
       
       const renderedCard = (
         <Card className={cn("border-primary/20 bg-primary/5", className)}>
-          <CardContent className="p-4">
+          <CardContent className="py-4 px-0">
             <div className="flex items-start gap-3">
               <Bot className="h-5 w-5 text-primary mt-0.5" />
               <div className="flex-1 space-y-2 min-w-0">
@@ -327,7 +327,7 @@ const StreamMessageComponent: React.FC<StreamMessageProps> = ({ message, classNa
       
       const renderedCard = (
         <Card className={cn("border-muted-foreground/20 bg-muted/20", className)}>
-          <CardContent className="p-4">
+          <CardContent className="py-4 px-0">
             <div className="flex items-start gap-3">
               <User className="h-5 w-5 text-muted-foreground mt-0.5" />
               <div className="flex-1 space-y-2 min-w-0">
@@ -645,7 +645,7 @@ const StreamMessageComponent: React.FC<StreamMessageProps> = ({ message, classNa
           isError ? "border-destructive/20 bg-destructive/5" : "border-green-500/20 bg-green-500/5",
           className
         )}>
-          <CardContent className="p-4">
+          <CardContent className="py-4 px-0">
             <div className="flex items-start gap-3">
               {isError ? (
                 <AlertCircle className="h-5 w-5 text-destructive mt-0.5" />

@@ -524,7 +524,7 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
 
   // Project path selection handled by parent tab controls
 
-  const handleSendPrompt = async (prompt: string, model: "sonnet" | "opus") => {
+  const handleSendPrompt = async (prompt: string, model: "sonnet" | "opus", images: Array<{ id: string; data: string }>) => {
     console.log('[ClaudeCodeSession] handleSendPrompt called with:', { prompt, model, projectPath, claudeSessionId, effectiveSession });
     
     if (!projectPath) {
@@ -836,7 +836,7 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
             
             // Small delay to ensure UI updates
             setTimeout(() => {
-              handleSendPrompt(nextPrompt.prompt, nextPrompt.model);
+              handleSendPrompt(nextPrompt.prompt, nextPrompt.model, []);
             }, 100);
           }
         };
@@ -926,13 +926,13 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
           console.log('[ClaudeCodeSession] Resuming session:', effectiveSession.id);
           trackEvent.sessionResumed(effectiveSession.id);
           trackEvent.modelSelected(model);
-          await api.resumeClaudeCode(projectPath, effectiveSession.id, prompt, model, tabId);
+          await api.resumeClaudeCode(projectPath, effectiveSession.id, prompt, model, tabId, images);
         } else {
           console.log('[ClaudeCodeSession] Starting new session');
           setIsFirstPrompt(false);
           trackEvent.sessionCreated(model, 'prompt_input');
           trackEvent.modelSelected(model);
-          await api.executeClaudeCode(projectPath, prompt, model, tabId);
+          await api.executeClaudeCode(projectPath, prompt, model, tabId, images);
         }
       }
     } catch (err) {
@@ -1106,18 +1106,26 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
       hasActiveSessionRef.current = false;
       isListeningRef.current = false;
       setError(null);
-      
-      // Clear queued prompts
-      setQueuedPrompts([]);
-      
-      // Add a message indicating the session was cancelled
-      const cancelMessage: ClaudeStreamMessage = {
-        type: "system",
-        subtype: "info",
-        result: "Session cancelled by user",
-        timestamp: new Date().toISOString()
-      };
-      setMessages(prev => [...prev, cancelMessage]);
+
+      // Process queued prompts after stopping (don't clear them!)
+      if (queuedPromptsRef.current.length > 0) {
+        const [nextPrompt, ...remainingPrompts] = queuedPromptsRef.current;
+        setQueuedPrompts(remainingPrompts);
+
+        // Small delay to ensure UI updates
+        setTimeout(() => {
+          handleSendPrompt(nextPrompt.prompt, nextPrompt.model, []);
+        }, 100);
+      } else {
+        // Only add cancel message if there are no queued prompts to process
+        const cancelMessage: ClaudeStreamMessage = {
+          type: "system",
+          subtype: "info",
+          result: "Session cancelled by user",
+          timestamp: new Date().toISOString()
+        };
+        setMessages(prev => [...prev, cancelMessage]);
+      }
     } catch (err) {
       console.error("Failed to cancel execution:", err);
       
@@ -1140,6 +1148,16 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
       hasActiveSessionRef.current = false;
       isListeningRef.current = false;
       setError(null);
+
+      // Process queued prompts even if cancel failed
+      if (queuedPromptsRef.current.length > 0) {
+        const [nextPrompt, ...remainingPrompts] = queuedPromptsRef.current;
+        setQueuedPrompts(remainingPrompts);
+
+        setTimeout(() => {
+          handleSendPrompt(nextPrompt.prompt, nextPrompt.model, []);
+        }, 100);
+      }
     }
   };
 
@@ -1274,13 +1292,13 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
   const messagesList = (
     <div
       ref={parentRef}
-      className="flex-1 overflow-y-auto relative pb-20"
+      className="flex-1 overflow-y-auto relative pb-32"
       style={{
         contain: 'strict',
       }}
     >
       <div
-        className="relative w-full px-3 sm:px-4 pt-4 sm:pt-6 pb-2 lg:max-w-6xl lg:mx-auto"
+        className="relative w-full px-1 sm:px-3 lg:px-4 pt-4 sm:pt-6 pb-8 lg:max-w-6xl lg:mx-auto"
         style={{
           height: `${Math.max(rowVirtualizer.getTotalSize(), 100)}px`,
           minHeight: '100px',
@@ -1298,7 +1316,7 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.3 }}
-                className="absolute inset-x-4 pb-4"
+                className="absolute inset-x-1 sm:inset-x-3 lg:inset-x-4 pb-4"
                 style={{
                   top: virtualItem.start,
                 }}
@@ -1320,7 +1338,7 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.15 }}
-          className="flex items-center justify-center py-4 mb-20"
+          className="flex items-center justify-center py-4 mb-32"
         >
           <div className="rotating-symbol text-primary" />
         </motion.div>
@@ -1332,7 +1350,7 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.15 }}
-          className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive mb-20 w-full lg:max-w-6xl lg:mx-auto"
+          className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive mb-32 w-full lg:max-w-6xl lg:mx-auto"
         >
           {error}
         </motion.div>

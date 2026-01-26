@@ -6,7 +6,6 @@
 # Dependencies
 node_modules
 target
-dist
 
 # Build artifacts
 *.deb

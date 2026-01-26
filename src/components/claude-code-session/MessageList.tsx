@@ -123,7 +123,7 @@ export const MessageList: React.FC<MessageListProps> = React.memo(({
                   transform: `translateY(${virtualItem.start}px)`,
                 }}
               >
-                <div className="px-4 py-2">
+                                <div className="px-0 py-2">
                   <StreamMessage 
                     message={message}
                     streamMessages={messages}

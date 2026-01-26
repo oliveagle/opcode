@@ -1,0 +1,77 @@
+# Multi-stage build for opcode-web (port 8081)
+# Build stage
+FROM debian:bookworm AS builder
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    libwebkit2gtk-4.1-dev \
+    libgtk-3-dev \
+    libayatana-appindicator3-dev \
+    librsvg2-dev \
+    patchelf \
+    build-essential \
+    curl \
+    wget \
+    file \
+    libssl-dev \
+    libxdo-dev \
+    libsoup-3.0-dev \
+    libjavascriptcoregtk-4.1-dev \
+    libgdk-pixbuf2.0-dev \
+    libcairo2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Cargo files
+COPY src-tauri/Cargo.toml ./src-tauri/Cargo.toml
+COPY src-tauri/Cargo.lock ./src-tauri/Cargo.lock
+COPY src-tauri/build.rs ./src-tauri/
+COPY src-tauri/tauri.conf.json ./src-tauri/
+COPY .cargo ./src-tauri/.cargo
+
+# Copy source code
+COPY src-tauri/src ./src-tauri/src
+COPY src-tauri/icons ./src-tauri/icons
+
+# Copy frontend
+COPY dist ./src-tauri/dist
+
+# Build
+WORKDIR /build/src-tauri
+RUN cargo build --release --bin opcode-web
+
+# Runtime stage - use same base as builder to ensure GLIBC compatibility
+FROM debian:bookworm
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libwebkit2gtk-4.1-0 \
+    libgtk-3-0 \
+    libayatana-appindicator3-1 \
+    librsvg2-2 \
+    libxdo3 \
+    libsoup-3.0-0 \
+    libjavascriptcoregtk-4.1-0 \
+    libgdk-pixbuf2.0-0 \
+    libcairo2 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 opcode && chown -R opcode:opcode /app
+
+USER opcode
+
+# Copy compiled binary
+COPY --from=builder --chown=opcode:opcode \
+    /build/src-tauri/target/release/opcode-web \
+    /app/
+
+# Expose port
+EXPOSE 8081
+
+# Run with port 8081
+CMD ["/app/opcode-web", "--port", "8081"]

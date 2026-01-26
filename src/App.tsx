@@ -264,7 +264,7 @@ function AppContent() {
               </motion.div>
 
               {/* Navigation Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 md:gap-6 max-w-2xl mx-auto px-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-0 sm:gap-4 md:gap-6 lg:gap-3 max-w-2xl mx-auto px-2">
                 {/* CC Agents Card */}
                 <motion.div
                   initial={{ opacity: 0, y: 8 }}
