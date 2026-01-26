@@ -340,9 +340,11 @@ button:focus-visible,
 }
 
 /* macOS-only: subtle window outline for transparent, custom-decorated window */
-html.is-macos body {
-  /* Maintain rounded-corner shape and add a gentle 1px inner outline */
-  box-shadow: inset 0 0 0 1px var(--color-border);
+@media (min-width: 1024px) {
+  html.is-macos body {
+    /* Maintain rounded-corner shape and add a gentle 1px inner outline */
+    box-shadow: inset 0 0 0 1px var(--color-border);
+  }
 }
 
 /* Typography Utility Classes */
