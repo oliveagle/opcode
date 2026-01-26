@@ -85,6 +85,7 @@ fn get_db_connection(path: &std::path::PathBuf) -> Result<rusqlite::Connection, 
 
 #[derive(Debug, Deserialize)]
 pub struct ClaudeExecutionRequest {
+    pub uuid: String, // Unique identifier for idempotency
     pub project_path: String,
     pub prompt: String,
     pub model: Option<String>,
@@ -203,6 +204,7 @@ fn init_web_db() -> Result<std::path::PathBuf, String> {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS message_queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL UNIQUE,
                 session_id TEXT NOT NULL,
                 command_type TEXT NOT NULL,
                 project_path TEXT NOT NULL,
@@ -217,12 +219,35 @@ fn init_web_db() -> Result<std::path::PathBuf, String> {
             [],
         ).map_err(|e| format!("Failed to create message_queue table: {}", e))?;
 
+        // Migrate existing tables: add uuid column if it doesn't exist
+        let has_uuid_column: bool = conn.query_row(
+            "SELECT COUNT(*) = 1 FROM pragma_table_info('message_queue') WHERE name = 'uuid'",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(false);
+
+        if !has_uuid_column {
+            println!("[MIGRATION] Adding uuid column to message_queue table...");
+            conn.execute(
+                "ALTER TABLE message_queue ADD COLUMN uuid TEXT",
+                [],
+            ).map_err(|e| format!("Failed to add uuid column: {}", e))?;
+            println!("[MIGRATION] uuid column added successfully");
+        }
+
         // Create index for faster queries
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_message_queue_session_status
              ON message_queue (session_id, status)",
             [],
         ).map_err(|e| format!("Failed to create message_queue index: {}", e))?;
+
+        // Create unique index on uuid for idempotency
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_message_queue_uuid
+             ON message_queue (uuid)",
+            [],
+        ).map_err(|e| format!("Failed to create uuid index: {}", e))?;
 
     }
 
@@ -1353,6 +1378,7 @@ async fn cancel_claude_execution(Path(session_id): Path<String>) -> Json<ApiResp
 /// Store a message in the message queue for persistence
 fn store_message_in_queue(
     db_path: &std::path::PathBuf,
+    uuid: &str,
     session_id: &str,
     command_type: &str,
     project_path: &str,
@@ -1361,17 +1387,32 @@ fn store_message_in_queue(
 ) -> Result<i64, String> {
     let conn = get_db_connection(db_path)?;
 
+    // Check if message with this UUID already exists (idempotency)
+    let existing_id: Result<i64, _> = conn.query_row(
+        "SELECT id FROM message_queue WHERE uuid = ?1",
+        &[uuid],
+        |row| row.get(0),
+    );
+
+    if let Ok(id) = existing_id {
+        println!(
+            "[MESSAGE_QUEUE] Message with uuid={} already exists (id: {}), skipping duplicate",
+            uuid, id
+        );
+        return Ok(id); // Return existing message ID for idempotency
+    }
+
     conn.execute(
-        "INSERT INTO message_queue (session_id, command_type, project_path, prompt, model, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'pending')",
-        &[session_id, command_type, project_path, prompt, model],
+        "INSERT INTO message_queue (uuid, session_id, command_type, project_path, prompt, model, status)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending')",
+        &[uuid, session_id, command_type, project_path, prompt, model],
     )
     .map_err(|e| format!("Failed to store message in queue: {}", e))?;
 
     let message_id = conn.last_insert_rowid();
     println!(
-        "[MESSAGE_QUEUE] Stored message #{} in queue (session: {}, type: {})",
-        message_id, session_id, command_type
+        "[MESSAGE_QUEUE] Stored message #{} (uuid: {}) in queue (session: {}, type: {})",
+        message_id, uuid, session_id, command_type
     );
 
     Ok(message_id)
@@ -1527,11 +1568,13 @@ async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
                         println!("[TRACE] Command type: {}", request.command_type);
                         println!("[TRACE] Project path: {}", request.project_path);
                         println!("[TRACE] Prompt length: {} chars", request.prompt.len());
+                        println!("[TRACE] Message UUID: {}", request.uuid);
 
-                        // Store message in database for persistence
+                        // Store message in database for persistence with UUID for idempotency
                         let model = request.model.clone().unwrap_or_default();
                         let message_id = match store_message_in_queue(
                             &state.db_path,
+                            &request.uuid,
                             &session_id,
                             &request.command_type,
                             &request.project_path,

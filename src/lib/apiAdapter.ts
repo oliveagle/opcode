@@ -284,14 +284,17 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
     // Send request when connection is ready
     const checkAndSend = () => {
       if (session.ws.readyState === WebSocket.OPEN) {
+        // Generate UUID for idempotency
+        const uuid = crypto.randomUUID();
         const request = {
+          uuid: uuid,
           command_type: command.replace('_claude_code', ''),
           project_path: params?.projectPath || '',
           prompt: params?.prompt || '',
           model: params?.model || 'claude-3-5-sonnet-20241022',
           session_id: sessionId,
         };
-        console.log(`[TRACE] Sending WebSocket request:`, request);
+        console.log(`[TRACE] Sending WebSocket request with UUID:`, request);
         session.ws.send(JSON.stringify(request));
       } else if (session.ws.readyState === WebSocket.CONNECTING) {
         setTimeout(checkAndSend, 50);
