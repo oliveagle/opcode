@@ -62,10 +62,15 @@ fn find_claude_binary_web() -> Result<String, String> {
 }
 
 #[derive(Clone)]
+struct SessionInfo {
+    sender: tokio::sync::mpsc::Sender<String>,
+    created_at: std::time::Instant,
+}
+
+#[derive(Clone)]
 pub struct AppState {
     // Track active WebSocket sessions for Claude execution
-    pub active_sessions:
-        Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<String>>>>,
+    pub active_sessions: Arc<tokio::sync::Mutex<std::collections::HashMap<String, SessionInfo>>>,
     // Database path for on-demand connections
     pub db_path: std::path::PathBuf,
     // Process registry for monitoring
@@ -1344,10 +1349,16 @@ async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
     // Channel for sending output to WebSocket
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(100);
 
-    // Store session in state
+    // Store session in state with timestamp
     {
         let mut sessions = state.active_sessions.lock().await;
-        sessions.insert(session_id.clone(), tx);
+        sessions.insert(
+            session_id.clone(),
+            SessionInfo {
+                sender: tx,
+                created_at: std::time::Instant::now(),
+            },
+        );
         println!(
             "[TRACE] Session stored in state - active sessions count: {}",
             sessions.len()
@@ -1470,7 +1481,7 @@ async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
                                     }),
                                 };
                                 println!("[TRACE] Sending completion message: {}", completion_msg);
-                                let _ = sender.send(completion_msg.to_string()).await;
+                                let _ = sender.sender.send(completion_msg.to_string()).await;
                             } else {
                                 println!("[TRACE] Session not found in active sessions when sending completion");
                             }
@@ -1487,8 +1498,8 @@ async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
                         });
                         // Clone sender before awaiting to avoid holding lock across await
                         let sender_opt = state.active_sessions.lock().await.get(&session_id).cloned();
-                        if let Some(sender_tx) = sender_opt {
-                            let _ = sender_tx.send(error_msg.to_string()).await;
+                        if let Some(session_info) = sender_opt {
+                            let _ = session_info.sender.send(error_msg.to_string()).await;
                         }
                     }
                 }
@@ -1879,12 +1890,12 @@ async fn send_to_session(state: &AppState, session_id: &str, message: String) {
     println!("[TRACE] Message: {}", message);
 
     let sessions = state.active_sessions.lock().await;
-    let sender_opt = sessions.get(session_id).cloned();
+    let session_info_opt = sessions.get(session_id).cloned();
     drop(sessions); // Release the lock before awaiting
-    
-    if let Some(sender) = sender_opt {
+
+    if let Some(session_info) = session_info_opt {
         println!("[TRACE] Found session in active sessions, sending message...");
-        match sender.send(message).await {
+        match session_info.sender.send(message).await {
             Ok(_) => println!("[TRACE] Message sent successfully"),
             Err(e) => println!("[TRACE] Failed to send message: {}", e),
         }
@@ -1988,7 +1999,39 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
         .nest_service("/assets", ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../dist/assets")))
         .nest_service("/vite.svg", ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../dist/vite.svg")))
         .layer(cors)
-        .with_state(state);
+        .with_state(state.clone());
+
+    // Start background task to clean up expired sessions
+    let cleanup_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // Every 5 minutes
+        loop {
+            interval.tick().await;
+            let mut sessions = cleanup_state.active_sessions.lock().await;
+            let before_count = sessions.len();
+            let now = std::time::Instant::now();
+
+            // Remove sessions older than 10 minutes
+            sessions.retain(|id, info| {
+                let age = now.duration_since(info.created_at);
+                let should_keep = age.as_secs() < 600; // 10 minutes
+                if !should_keep {
+                    println!("[CLEANUP] Removing expired session: {} (age: {}s)", id, age.as_secs());
+                }
+                should_keep
+            });
+
+            let after_count = sessions.len();
+            if before_count > after_count {
+                println!(
+                    "[CLEANUP] Cleaned up {} expired session(s) ({} -> {})",
+                    before_count - after_count,
+                    before_count,
+                    after_count
+                );
+            }
+        }
+    });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     println!("🌐 Web server running on http://0.0.0.0:{}", port);
