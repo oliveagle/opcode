@@ -212,11 +212,17 @@ fn init_web_db() -> Result<std::path::PathBuf, String> {
                 created_at INTEGER DEFAULT (strftime('%s', 'now')),
                 processed_at INTEGER,
                 error TEXT,
-                retries INTEGER DEFAULT 0,
-                INDEX (session_id, status)
+                retries INTEGER DEFAULT 0
             )",
             [],
         ).map_err(|e| format!("Failed to create message_queue table: {}", e))?;
+
+        // Create index for faster queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_message_queue_session_status
+             ON message_queue (session_id, status)",
+            [],
+        ).map_err(|e| format!("Failed to create message_queue index: {}", e))?;
 
     }
 
