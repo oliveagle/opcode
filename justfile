@@ -104,9 +104,9 @@ web-host-port HOST PORT: build-frontend
 kill:
     @lsof -ti :8080 | xargs -r kill -9 && echo "✅ Port 8080 cleared" || echo "No processes on port 8080"
 
-# Kill all opcode processes
-kill-all:
-    @pkill -f opcode-web && echo "✅ All opcode processes killed" || echo "No opcode processes found"
+# Stop monitor and kill all opcode processes
+stop-all:
+    @./dev-helpers/stop-all.sh
 
 # Install Tauri system dependencies (Linux)
 deps:
