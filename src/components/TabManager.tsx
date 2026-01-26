@@ -69,11 +69,10 @@ const TabItem: React.FC<TabItemProps> = ({ tab, isActive, onClose, onClick, isDr
       transition={{ duration: 0.1 }} // Snappy reorder animation
       className={cn(
         "relative flex items-center gap-2 text-sm cursor-pointer select-none group",
-        "transition-colors duration-100 overflow-hidden border-r border-border/20",
-        "before:absolute before:bottom-0 before:left-0 before:right-0 before:h-0.5 before:transition-colors before:duration-100",
+        "transition-all duration-150 overflow-hidden border-r border-border/20",
         isActive
-          ? "bg-card text-card-foreground before:bg-primary"
-          : "bg-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground before:bg-transparent",
+          ? "bg-card text-card-foreground border-l-2 border-l-primary shadow-sm -ml-px"
+          : "bg-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground",
         isDragging && "bg-card border-primary/50 shadow-sm z-50",
         "min-w-[120px] max-w-[220px] h-8 px-3"
       )}

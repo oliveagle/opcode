@@ -49,8 +49,8 @@ test:
     cd src-tauri && cargo test
 
 # Run local integration tests (safe for deployment validation)
-test-local: build-frontend
-    @./dev-tests.sh {{flag}}
+test-local *args: build-frontend
+    @./dev-tests.sh {{args}}
 
 # Quick sanity check before deployment
 test-quick:

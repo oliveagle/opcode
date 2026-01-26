@@ -51,6 +51,112 @@ export function detectEnvironment(): boolean {
 }
 
 /**
+ * Network connection status types
+ */
+export type NetworkStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+/**
+ * Network status callback type
+ */
+export type NetworkStatusCallback = (status: NetworkStatus) => void;
+
+/**
+ * Network status manager for tracking WebSocket connection state
+ */
+class NetworkStatusManager {
+  private currentStatus: NetworkStatus = 'disconnected';
+  private listeners: Set<NetworkStatusCallback> = new Set();
+  private statusHistory: Array<{ status: NetworkStatus; timestamp: number }> = [];
+  private maxHistoryLength = 50;
+
+  /**
+   * Get current network status
+   */
+  getStatus(): NetworkStatus {
+    return this.currentStatus;
+  }
+
+  /**
+   * Get status history for debugging
+   */
+  getHistory(): Array<{ status: NetworkStatus; timestamp: number }> {
+    return [...this.statusHistory];
+  }
+
+  /**
+   * Update network status and notify listeners
+   */
+  setStatus(status: NetworkStatus): void {
+    if (this.currentStatus === status) return;
+
+    this.currentStatus = status;
+    this.addToHistory(status);
+
+    // Notify all listeners
+    this.listeners.forEach(callback => {
+      try {
+        callback(status);
+      } catch (error) {
+        console.error('[NetworkStatusManager] Listener error:', error);
+      }
+    });
+
+    console.log(`[NetworkStatusManager] Status changed to: ${status}`);
+  }
+
+  /**
+   * Add status change to history
+   */
+  private addToHistory(status: NetworkStatus): void {
+    this.statusHistory.push({ status, timestamp: Date.now() });
+
+    // Keep history at max length
+    if (this.statusHistory.length > this.maxHistoryLength) {
+      this.statusHistory = this.statusHistory.slice(-this.maxHistoryLength);
+    }
+  }
+
+  /**
+   * Subscribe to network status changes
+   */
+  subscribe(callback: NetworkStatusCallback): () => void {
+    this.listeners.add(callback);
+
+    // Immediately call with current status
+    callback(this.currentStatus);
+
+    // Return unsubscribe function
+    return () => {
+      this.listeners.delete(callback);
+    };
+  }
+
+  /**
+   * Check if currently in a working state
+   */
+  isWorking(): boolean {
+    return this.currentStatus === 'connecting' || this.currentStatus === 'connected';
+  }
+
+  /**
+   * Check if there's an error state
+   */
+  hasError(): boolean {
+    return this.currentStatus === 'error' || this.currentStatus === 'disconnected';
+  }
+
+  /**
+   * Reset status to disconnected
+   */
+  reset(): void {
+    this.setStatus('disconnected');
+  }
+}
+
+// Singleton instance
+export const networkStatusManager = new NetworkStatusManager();
+
+/**
  * Response wrapper for REST API calls
  */
 interface ApiResponse<T> {
@@ -239,14 +345,37 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
 
   console.log(`[TRACE] handleStreamingCommand: ${command}, tabId: ${tabId}, sessionId: ${sessionId}`);
 
+  // Update network status to connecting
+  networkStatusManager.setStatus('connecting');
+
   return new Promise(async (resolve, reject) => {
     // Dynamic import for browser compatibility
     const { wsManager } = await import('./wsSessionManager');
     const session = wsManager.getOrCreateSession(tabId, sessionId);
 
+    // Track if we've already resolved/rejected to avoid multiple callbacks
+    let isResolved = false;
+
+    const safeResolve = (value: T) => {
+      if (isResolved) return;
+      isResolved = true;
+      networkStatusManager.setStatus('connected');
+      resolve(value);
+    };
+
+    const safeReject = (error: Error) => {
+      if (isResolved) return;
+      isResolved = true;
+      networkStatusManager.setStatus('error');
+      reject(error);
+    };
+
     // Register handler for this specific tab
     const unregister = wsManager.registerHandler(tabId, (message: any) => {
       console.log(`[TRACE] Received message for tab ${tabId}:`, message);
+
+      // Update status to connected when we receive output
+      networkStatusManager.setStatus('connected');
 
       if (message.type === 'output') {
         try {
@@ -267,9 +396,9 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
         window.dispatchEvent(completeEvent);
         unregister();
         if (message.status === 'success') {
-          resolve({} as T);
+          safeResolve({} as T);
         } else {
-          reject(new Error(message.error || 'Execution failed'));
+          safeReject(new Error(message.error || 'Execution failed'));
         }
       } else if (message.type === 'error') {
         const errorEvent = new CustomEvent('claude-error', {
@@ -277,7 +406,7 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
         });
         window.dispatchEvent(errorEvent);
         unregister();
-        reject(new Error(message.message || 'Unknown error'));
+        safeReject(new Error(message.message || 'Unknown error'));
       }
     });
 
@@ -302,26 +431,38 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
         setTimeout(checkAndSend, 50);
       } else {
         unregister();
-        reject(new Error('WebSocket connection failed'));
+        safeReject(new Error('WebSocket connection failed'));
       }
+    };
+
+    session.ws.onopen = () => {
+      console.log('[TRACE] WebSocket connection opened');
+      networkStatusManager.setStatus('connected');
     };
 
     session.ws.onerror = (error: Event) => {
       console.error('[TRACE] WebSocket error:', error);
+      networkStatusManager.setStatus('error');
       unregister();
       const errorEvent = new CustomEvent('claude-error', {
         detail: 'WebSocket connection failed'
       });
       window.dispatchEvent(errorEvent);
-      reject(new Error('WebSocket connection failed'));
+      safeReject(new Error('WebSocket connection failed'));
     };
 
     session.ws.onclose = (event: CloseEvent) => {
+      console.log('[TRACE] WebSocket connection closed:', event.code, event.reason);
       if (event.code !== 1000 && event.code !== 1001) {
+        // Unexpected close - could indicate network issues
+        networkStatusManager.setStatus('error');
         const cancelEvent = new CustomEvent('claude-complete', {
           detail: false
         });
         window.dispatchEvent(cancelEvent);
+      } else {
+        // Normal close
+        networkStatusManager.setStatus('disconnected');
       }
     };
 
