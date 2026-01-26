@@ -947,19 +947,16 @@ const FloatingPromptInputInner = (
         imageCounterRef.current += 1;
         const imageId = `img-${imageCounterRef.current}`;
 
-        // Add to embedded images state for preview
+        // Add to embedded images state for preview only
         setEmbeddedImages(currentImages => [...currentImages, { id: imageId, data: dataUrl }]);
 
-        // Add a simple placeholder to the prompt, not the full base64 data
-        const mention = `@[image-${imageId}]`;
-        const newPrompt = prompt + (prompt.endsWith(' ') || prompt === '' ? '' : ' ') + mention + ' ';
-        setPrompt(newPrompt);
+        // Don't add anything to prompt - image will be sent as attachment
+        console.log(`[ImageUpload] Image ${imageId} loaded, will be sent as attachment`);
 
         // Focus the textarea
         setTimeout(() => {
           const target = isExpanded ? expandedTextareaRef.current : textareaRef.current;
           target?.focus();
-          target?.setSelectionRange(newPrompt.length, newPrompt.length);
         }, 0);
       }
     };

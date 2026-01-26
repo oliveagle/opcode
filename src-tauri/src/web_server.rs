@@ -1984,9 +1984,9 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
         )
         // WebSocket endpoint for real-time Claude execution
         .route("/ws/claude", get(claude_websocket))
-        // Serve static assets
-        .nest_service("/assets", ServeDir::new("../dist/assets"))
-        .nest_service("/vite.svg", ServeDir::new("../dist/vite.svg"))
+        // Serve static assets - use absolute path based on executable location
+        .nest_service("/assets", ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../dist/assets")))
+        .nest_service("/vite.svg", ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../dist/vite.svg")))
         .layer(cors)
         .with_state(state);
 
