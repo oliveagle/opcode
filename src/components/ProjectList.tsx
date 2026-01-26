@@ -113,13 +113,13 @@ export const ProjectList: React.FC<ProjectListProps> = ({
 
   return (
     <div className={cn("h-full overflow-y-auto", className)}>
-      <div className="max-w-6xl mx-auto flex flex-col h-full">
+      <div className="w-full flex flex-col h-full lg:max-w-6xl lg:mx-auto">
         {/* Header */}
-        <div className="p-6">
+        <div className="p-3 sm:p-4 md:p-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold">Projects</h1>
-              <p className="mt-1 text-body-small text-muted-foreground">
+              <h1 className="text-2xl sm:text-3xl font-bold">Projects</h1>
+              <p className="mt-1 text-xs sm:text-sm text-muted-foreground hidden sm:block">
                 Select a project to start working with Claude Code
               </p>
             </div>
@@ -140,11 +140,11 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6">
           {/* Recent projects section */}
           {displayedProjects.length > 0 ? (
-            <Card className="p-6">
-              <div className="flex items-center justify-between mb-4">
+            <Card className="p-3 sm:p-4 md:p-6">
+              <div className="flex items-center justify-between mb-3 sm:mb-4">
                 <h2 className="text-heading-4">Recent Projects</h2>
             {!showAll ? (
               <button 
@@ -240,9 +240,9 @@ export const ProjectList: React.FC<ProjectListProps> = ({
           )}
             </Card>
           ) : (
-            <Card className="p-12">
+            <Card className="p-6 sm:p-8 md:p-12">
               <div className="flex flex-col items-center justify-center text-center">
-                <div className="w-16 h-16 bg-primary/10 rounded-lg flex items-center justify-center mb-4">
+                <div className="w-12 h-12 sm:w-16 sm:h-16 bg-primary/10 rounded-lg flex items-center justify-center mb-3 sm:mb-4">
                   <FolderOpen className="h-8 w-8 text-primary" />
                 </div>
                 <h3 className="text-heading-3 mb-2">No recent projects</h3>

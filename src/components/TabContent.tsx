@@ -179,8 +179,8 @@ const TabPanel: React.FC<TabPanelProps> = ({ tab, isActive }) => {
               {/* Content based on selection */}
               {selectedProject ? (
                 <div className="h-full overflow-y-auto">
-                  <div className="max-w-6xl mx-auto p-6">
-                    <div className="mb-6">
+                  <div className="w-full p-3 sm:p-4 md:p-6 lg:max-w-6xl lg:mx-auto">
+                    <div className="mb-4 sm:mb-6">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <motion.div
@@ -205,10 +205,10 @@ const TabPanel: React.FC<TabPanelProps> = ({ tab, isActive }) => {
                             </Button>
                           </motion.div>
                           <div>
-                            <h1 className="text-3xl font-bold tracking-tight">
+                            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
                               {selectedProject.path.split('/').pop()}
                             </h1>
-                            <p className="mt-1 text-sm text-muted-foreground">
+                            <p className="mt-1 text-xs sm:text-sm text-muted-foreground">
                               {`${sessions.length} session${sessions.length !== 1 ? 's' : ''}`}
                             </p>
                           </div>
