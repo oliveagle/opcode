@@ -238,36 +238,36 @@ function AppContent() {
     switch (view) {
       case "welcome":
         return (
-          <div className="flex items-center justify-center p-4" style={{ height: "100%" }}>
-            <div className="w-full max-w-4xl">
+          <div className="flex items-center justify-center p-3 sm:p-4" style={{ height: "100%" }}>
+            <div className="w-full">
               {/* Welcome Header */}
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.15 }}
-                className="mb-12 text-center"
+                className="mb-6 sm:mb-8 md:mb-12 text-center"
               >
-                <h1 className="text-4xl font-bold tracking-tight">
+                <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">
                   <span className="rotating-symbol"></span>
                   Welcome to opcode
                 </h1>
               </motion.div>
 
               {/* Navigation Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 md:gap-6 max-w-2xl mx-auto px-2">
                 {/* CC Agents Card */}
                 <motion.div
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.15, delay: 0.05 }}
                 >
-                  <Card 
-                    className="h-64 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg border border-border/50 shimmer-hover trailing-border"
+                  <Card
+                    className="h-48 sm:h-56 md:h-64 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg border border-border/50 shimmer-hover trailing-border"
                     onClick={() => handleViewChange("cc-agents")}
                   >
-                    <div className="h-full flex flex-col items-center justify-center p-8">
-                      <Bot className="h-16 w-16 mb-4 text-primary" />
-                      <h2 className="text-xl font-semibold">CC Agents</h2>
+                    <div className="h-full flex flex-col items-center justify-center p-4 sm:p-6 md:p-8">
+                      <Bot className="h-12 w-12 sm:h-14 sm:w-14 md:h-16 md:w-16 mb-3 sm:mb-4 text-primary" />
+                      <h2 className="text-lg sm:text-xl font-semibold">CC Agents</h2>
                     </div>
                   </Card>
                 </motion.div>
@@ -278,13 +278,13 @@ function AppContent() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.15, delay: 0.1 }}
                 >
-                  <Card 
-                    className="h-64 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg border border-border/50 shimmer-hover trailing-border"
+                  <Card
+                    className="h-48 sm:h-56 md:h-64 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg border border-border/50 shimmer-hover trailing-border"
                     onClick={() => handleViewChange("projects")}
                   >
-                    <div className="h-full flex flex-col items-center justify-center p-8">
-                      <FolderCode className="h-16 w-16 mb-4 text-primary" />
-                      <h2 className="text-xl font-semibold">Projects</h2>
+                    <div className="h-full flex flex-col items-center justify-center p-4 sm:p-6 md:p-8">
+                      <FolderCode className="h-12 w-12 sm:h-14 sm:w-14 md:h-16 md:w-16 mb-3 sm:mb-4 text-primary" />
+                      <h2 className="text-lg sm:text-xl font-semibold">Projects</h2>
                     </div>
                   </Card>
                 </motion.div>
