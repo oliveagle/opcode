@@ -197,6 +197,28 @@ async fn health_check() -> Json<Value> {
     }))
 }
 
+/// Client log endpoint - receives debug logs from frontend
+#[derive(Deserialize)]
+struct ClientLogRequest {
+    level: String,  // debug, info, warn, error
+    message: String,
+    source: Option<String>,  // e.g., "apiAdapter", "wsSessionManager"
+    timestamp: Option<String>,
+}
+
+async fn client_log(
+    Json(log_req): Json<ClientLogRequest>,
+) -> Json<Value> {
+    let timestamp = log_req.timestamp.unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    println!("[CLIENT-{}] [{}] {} - {}",
+        log_req.level.to_uppercase(),
+        timestamp,
+        log_req.source.unwrap_or_else(|| "unknown".to_string()),
+        log_req.message
+    );
+    Json(json!({ "status": "ok" }))
+}
+
 /// Initialize SQLite database for web mode
 fn init_web_db() -> Result<std::path::PathBuf, String> {
     let data_dir = dirs::data_dir()
@@ -1645,14 +1667,33 @@ async fn get_claude_session_output(Path(session_id): Path<String>) -> Json<ApiRe
     ))
 }
 
-/// WebSocket handler for Claude execution with streaming output
-async fn claude_websocket(ws: WebSocketUpgrade, AxumState(state): AxumState<AppState>) -> Response {
-    ws.on_upgrade(move |socket| claude_websocket_handler(socket, state))
+/// Query parameters for WebSocket connection
+#[derive(Deserialize)]
+struct WsQueryParams {
+    /// Session ID for isolating WebSocket connections
+    session_id: Option<String>,
 }
 
-async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
+/// WebSocket handler for Claude execution with streaming output
+async fn claude_websocket(
+    ws: WebSocketUpgrade,
+    AxumState(state): AxumState<AppState>,
+    Query(params): Query<WsQueryParams>,
+) -> Response {
+    ws.on_upgrade(move |socket| claude_websocket_handler(socket, state, params.session_id))
+}
+
+async fn claude_websocket_handler(socket: WebSocket, state: AppState, session_id_from_query: Option<String>) {
     let (mut sender, mut receiver) = socket.split();
-    let session_id = uuid::Uuid::new_v4().to_string();
+    // Use provided session_id from query, or generate a new one if not provided
+    let session_id = session_id_from_query.clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    println!("[WS] ====== SESSION CREATED ======");
+    println!("[WS] session_id_from_query: {:?}", session_id_from_query);
+    println!("[WS] final_session_id: {}", session_id);
+    println!("[WS] active_sessions before insert: {}", state.active_sessions.lock().await.len());
+    println!("[WS] ==============================");
 
     println!(
         "[TRACE] WebSocket handler started - session_id: {}",
@@ -1686,36 +1727,37 @@ async fn claude_websocket_handler(socket: WebSocket, state: AppState) {
             session_id_for_forward
         );
         while let Some(message) = rx.recv().await {
-            println!("[TRACE] Forwarding message to WebSocket: {}", message);
+            println!("[TRACE] [SESSION:{}] Forwarding message to WebSocket: {}", session_id_for_forward, message);
             if sender.send(Message::Text(message.into())).await.is_err() {
-                println!("[TRACE] Failed to send message to WebSocket - connection closed");
+                println!("[TRACE] [SESSION:{}] Failed to send message to WebSocket - connection closed", session_id_for_forward);
                 break;
             }
         }
         println!(
-            "[TRACE] Forward task ended for session {}",
+            "[TRACE] [SESSION:{}] Forward task ended",
             session_id_for_forward
         );
     });
 
     // Handle incoming messages from WebSocket
-    println!("[TRACE] Starting to listen for WebSocket messages");
+    println!("[TRACE] [SESSION:{}] Starting to listen for WebSocket messages", session_id);
     while let Some(msg) = receiver.next().await {
-        println!("[TRACE] Received WebSocket message: {:?}", msg);
+        println!("[TRACE] [SESSION:{}] Received WebSocket message: {:?}", session_id, msg);
         if let Ok(msg) = msg {
             if let Message::Text(text) = msg {
                 println!(
-                    "[TRACE] WebSocket text message received - length: {} chars",
-                    text.len()
+                    "[TRACE] [SESSION:{}] WebSocket text message received - length: {} chars",
+                    session_id, text.len()
                 );
-                println!("[TRACE] WebSocket message content: {}", text);
+                println!("[TRACE] [SESSION:{}] WebSocket message content: {}", session_id, text);
                 match serde_json::from_str::<ClaudeExecutionRequest>(&text) {
                     Ok(request) => {
-                        println!("[TRACE] Successfully parsed request: {:?}", request);
-                        println!("[TRACE] Command type: {}", request.command_type);
-                        println!("[TRACE] Project path: {}", request.project_path);
-                        println!("[TRACE] Prompt length: {} chars", request.prompt.len());
-                        println!("[TRACE] Message UUID: {}", request.uuid);
+                        println!("[TRACE] [SESSION:{}] Successfully parsed request: {:?}", session_id, request);
+                        println!("[TRACE] [SESSION:{}] Command type: {}", session_id, request.command_type);
+                        println!("[TRACE] [SESSION:{}] Project path: {}", session_id, request.project_path);
+                        println!("[TRACE] [SESSION:{}] Prompt length: {} chars", session_id, request.prompt.len());
+                        println!("[TRACE] [SESSION:{}] Message UUID: {}", session_id, request.uuid);
+                        println!("[TRACE] [SESSION:{}] Request session_id: {:?}", session_id, request.session_id);
 
                         // Store message in database for persistence with UUID for idempotency
                         let model = request.model.clone().unwrap_or_default();
@@ -2479,6 +2521,8 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
         .route("/index.html", get(serve_frontend))
         // Health check endpoint
         .route("/api/health", get(health_check))
+        // Client log endpoint for debugging
+        .route("/api/log", post(client_log))
         // API routes (REST API equivalent of Tauri commands)
         .route("/api/home", get(get_home_directory))
         .route("/api/browse", get(browse_directory))

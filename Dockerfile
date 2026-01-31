@@ -20,7 +20,7 @@ COPY src-tauri/icons ./src-tauri/icons
 RUN bun run build
 
 # Stage 2: Build Rust backend
-FROM rust:1.83-bookworm AS backend-builder
+FROM rust:bookworm AS backend-builder
 
 WORKDIR /build
 

@@ -47,12 +47,19 @@ jobs:
       - name: Create artifacts directory
         run: |
           mkdir -p dist/linux-x86_64
-          cp src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb dist/linux-x86_64/ || true
-          cp src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage dist/linux-x86_64/ || true
-          
-          # Generate checksums
+          # Copy build artifacts if they exist
+          if [ -d "src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb" ]; then
+            cp src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb dist/linux-x86_64/
+          fi
+          if [ -d "src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage" ]; then
+            cp src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage dist/linux-x86_64/
+          fi
+
+          # Generate checksums only if there are files
           cd dist/linux-x86_64
-          sha256sum * > checksums.txt
+          if [ "$(ls -A *.deb *.AppImage 2>/dev/null)" ]; then
+            sha256sum * > checksums.txt
+          fi
       
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

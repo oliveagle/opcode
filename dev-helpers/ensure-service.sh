@@ -44,7 +44,7 @@ clear_port() {
     if [ -n "$pid" ]; then
         log_warn "Port ${PORT} occupied by PID $pid, terminating..."
         kill -9 "$pid" 2>/dev/null || true
-        sleep 1
+        sleep 2
 
         # Verify port is clear
         if lsof -ti :"$PORT" > /dev/null 2>&1; then
@@ -56,6 +56,25 @@ clear_port() {
         log_info "Port ${PORT} is available"
     fi
 
+    # Wait for port to be fully released (handle TIME_WAIT state)
+    log_info "Waiting for port ${PORT} to be fully released..."
+    local max_wait=10
+    local waited=0
+    while [ $waited -lt $max_wait ]; do
+        # Try to connect to the port - if connection refused, port is free
+        if ! curl -s "http://localhost:${PORT}/api/process_stats" > /dev/null 2>&1; then
+            # Connection failed (port not in use or still in TIME_WAIT)
+            # Try a quick netcat check to confirm port is free
+            if ! (echo > /dev/tcp/localhost/$PORT) 2>/dev/null; then
+                log_info "Port ${PORT} is ready for binding"
+                return 0
+            fi
+        fi
+        sleep 1
+        ((waited++))
+    done
+
+    log_warn "Port ${PORT} may still be in TIME_WAIT, proceeding anyway..."
     return 0
 }
 
@@ -92,6 +111,17 @@ start_service() {
     done
 
     log_error "Service failed to become healthy within ${max_wait}s"
+    echo ""
+    echo -e "${RED}=== Service Startup Failed ===${NC}"
+    echo -e "${YELLOW}Checking recent logs for errors:${NC}"
+    echo ""
+    tail -30 /tmp/opcode-web.log 2>/dev/null || echo "No log available"
+    echo ""
+    echo -e "${YELLOW}Common causes:${NC}"
+    echo "  - Frontend build failed: Run 'bun run build' to see errors"
+    echo "  - Rust compilation failed: Check cargo errors above"
+    echo "  - Port not released: Run 'just stop-all' and retry"
+    echo ""
     return 1
 }
 

@@ -193,9 +193,15 @@ status:
     @echo "📝 Recent logs:"
     @tail -20 /tmp/opcode-web.log 2>/dev/null || echo "No logs found"
 
-# Follow service logs
+# Show recent service logs with errors highlighted
 logs:
-    @tail -f /tmp/opcode-web.log
+    @echo "=== Live Service Logs (Ctrl+C to exit) ==="
+    @tail -f /tmp/opcode-web.log | sed -e 's/ERROR/\[ERROR\]/g' -e 's/error/\[error\]/g' -e 's/FAILED/\[FAILED\]/g' || true
+
+# Show last 50 lines of service logs
+log-tail:
+    @echo "=== Last 50 lines of service logs ==="
+    @tail -50 /tmp/opcode-web.log
 
 # Save current development context
 save-context:

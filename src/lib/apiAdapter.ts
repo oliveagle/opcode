@@ -1,6 +1,6 @@
 /**
  * API Adapter - Compatibility layer for Tauri vs Web environments
- * 
+ *
  * This module detects whether we're running in Tauri (desktop app) or web browser
  * and provides a unified interface that switches between:
  * - Tauri invoke calls (for desktop)
@@ -18,35 +18,89 @@ declare global {
   }
 }
 
-// Environment detection
-let isTauriEnvironment: boolean | null = null;
+// Client-side logger that sends logs to backend for debugging
+const clientLogCache: Array<{ level: string; message: string; source: string; timestamp: string }> = [];
+const LOG_CACHE_SIZE = 50;
+let logEndpointChecked = false;
+
+async function sendLogToBackend(level: string, source: string, message: string) {
+  if (logEndpointChecked) {
+    // Endpoint already checked and not available, skip
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        level,
+        source,
+        message: message.substring(0, 2000), // Limit message size
+        timestamp: new Date().toISOString()
+      })
+    });
+
+    if (!response.ok) {
+      logEndpointChecked = true; // Endpoint doesn't exist
+    }
+  } catch (e) {
+    logEndpointChecked = true; // Network error, endpoint not available
+  }
+}
+
+// Override console.log to capture frontend logs
+const originalConsoleLog = console.log;
+const originalConsoleError = console.error;
+
+console.log = function(...args: any[]) {
+  originalConsoleLog.apply(console, args);
+  const message = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+  clientLogCache.push({ level: 'debug', message, source: 'console', timestamp: new Date().toISOString() });
+  if (clientLogCache.length > LOG_CACHE_SIZE) clientLogCache.shift();
+  sendLogToBackend('debug', 'console', message);
+};
+
+console.error = function(...args: any[]) {
+  originalConsoleError.apply(console, args);
+  const message = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+  clientLogCache.push({ level: 'error', message, source: 'console', timestamp: new Date().toISOString() });
+  if (clientLogCache.length > LOG_CACHE_SIZE) clientLogCache.shift();
+  sendLogToBackend('error', 'console', message);
+};
+
+// Helper to send debug logs with specific source to backend
+export function clientLog(source: string, message: string, level: 'debug' | 'info' | 'warn' | 'error' = 'debug') {
+  clientLogCache.push({ level, message, source, timestamp: new Date().toISOString() });
+  if (clientLogCache.length > LOG_CACHE_SIZE) clientLogCache.shift();
+  sendLogToBackend(level, source, message);
+}
+
+// Environment detection - removed caching as we now check for real Tauri internals
 
 /**
  * Detect if we're running in Tauri environment
  */
 export function detectEnvironment(): boolean {
-  if (isTauriEnvironment !== null) {
-    return isTauriEnvironment;
-  }
-
   // Check if we're in a browser environment first
   if (typeof window === 'undefined') {
-    isTauriEnvironment = false;
     return false;
   }
 
-  // Check for Tauri-specific indicators
-  const isTauri = !!(
-    window.__TAURI__ || 
-    window.__TAURI_METADATA__ ||
-    window.__TAURI_INTERNALS__ ||
-    // Check user agent for Tauri
-    navigator.userAgent.includes('Tauri')
-  );
+  // Check for Tauri-specific indicators that indicate REAL Tauri app
+  // We check for __TAURI_METADATA__ and __TAURI_INTERNALS__ which are only set in real Tauri apps
+  // window.__TAURI__ can be set by our initializeWebMode() in web mode, so we don't rely on it
+  const hasTauriInternals = !!(window.__TAURI_METADATA__ || window.__TAURI_INTERNALS__);
+  const hasTauriUA = navigator.userAgent.includes('Tauri') && !navigator.userAgent.includes('Mobile Safari');
 
-  console.log('[detectEnvironment] isTauri:', isTauri, 'userAgent:', navigator.userAgent);
-  
-  isTauriEnvironment = isTauri;
+  // Only detect Tauri if we have real Tauri internals or proper Tauri user agent
+  const isTauri = hasTauriInternals || hasTauriUA;
+
+  console.log('[detectEnvironment] hasTauriInternals:', hasTauriInternals);
+  console.log('[detectEnvironment] hasTauriUA:', hasTauriUA);
+  console.log('[detectEnvironment] userAgent:', navigator.userAgent);
+  console.log('[detectEnvironment] isTauri:', isTauri);
+
   return isTauri;
 }
 
@@ -400,14 +454,40 @@ export function getEnvironmentInfo() {
 }
 
 /**
+ * Session persistence utilities for WebSocket connections
+ */
+const SESSION_STORAGE_KEY = 'opcode_ws_session_id';
+
+function getPersistentSessionId(): string {
+  if (typeof sessionStorage === 'undefined') {
+    console.log('[WS Session] sessionStorage not available, generating temp session');
+    return `session-${Date.now()}`;
+  }
+  
+  let sessionId = sessionStorage.getItem(SESSION_STORAGE_KEY);
+  if (!sessionId) {
+    sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    sessionStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+    console.log(`[WS Session] Created NEW session: ${sessionId}`);
+  } else {
+    console.log(`[WS Session] Reused EXISTING session: ${sessionId}`);
+  }
+  return sessionId;
+}
+
+/**
  * Handle streaming commands via WebSocket in web mode
  * Uses WebSocketSessionManager for per-tab isolation
  */
 async function handleStreamingCommand<T>(command: string, params?: any): Promise<T> {
-  const tabId = params?.tabId || 'default';
-  const sessionId = params?.sessionId || tabId;
+  clientLog('apiAdapter', `handleStreamingCommand ENTERED - command: ${command}`);
+  clientLog('apiAdapter', `params: ${JSON.stringify(params || {})}`);
 
-  console.log(`[TRACE] handleStreamingCommand: ${command}, tabId: ${tabId}, sessionId: ${sessionId}`);
+  const tabId = params?.tabId || 'default';
+  // Use persistent session ID across page reloads
+  const sessionId = params?.sessionId || getPersistentSessionId();
+
+  clientLog('apiAdapter', `tabId: "${tabId}", sessionId: "${sessionId}"`);
 
   // Update network status to connecting
   networkStatusManager.setStatus('connecting');
@@ -415,12 +495,39 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
   return new Promise(async (resolve, reject) => {
     // Dynamic import for browser compatibility
     const { wsManager } = await import('./wsSessionManager');
+
+    clientLog('apiAdapter', `Calling getOrCreateSession with tabId: "${tabId}", sessionId: "${sessionId}"`);
     const session = wsManager.getOrCreateSession(tabId, sessionId);
+    clientLog('apiAdapter', `Session created/retrieved - id: ${session.id}, ws.readyState: ${session.ws.readyState}, isStale: ${session.isStale}`);
 
     // Track if we've already resolved/rejected to avoid multiple callbacks
     let isResolved = false;
 
+    // Track if message was successfully sent to clear timeout
+    // MUST be declared before sendTimeout to avoid hoisting issues
+    let messageSuccessfullySent = false;
+
+    // Add timeout protection - reject if we can't send within 5 seconds (longer for mobile)
+    const sendTimeout = setTimeout(() => {
+      if (!isResolved) {
+        // CRITICAL FIX: If message was already sent, don't timeout - we're waiting for response now
+        if (messageSuccessfullySent) {
+          clientLog('apiAdapter', 'Timeout reached but message was already sent, ignoring timeout');
+          return;
+        }
+        clientLog('apiAdapter', `Send timeout reached - readyState: ${session.ws.readyState}, isStale: ${session.isStale}, messageSent: ${messageSuccessfullySent}`, 'error');
+        if (!isResolved) {
+          isResolved = true;
+          networkStatusManager.setStatus('error');
+          unregister();
+          reject(new Error(`WebSocket connection timeout (state=${session.ws.readyState}) - failed to establish connection within 5 seconds`));
+        }
+      }
+    }, 5000);
+
     const safeResolve = (value: T) => {
+      clearTimeout(sendTimeout);
+      clientLog('apiAdapter', 'safeResolve called');
       if (isResolved) return;
       isResolved = true;
       networkStatusManager.setStatus('connected');
@@ -428,15 +535,18 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
     };
 
     const safeReject = (error: Error) => {
+      clearTimeout(sendTimeout);
+      clientLog('apiAdapter', `safeReject called: ${error.message}`, 'error');
       if (isResolved) return;
       isResolved = true;
       networkStatusManager.setStatus('error');
       reject(error);
     };
 
-    // Register handler for this specific tab
+    // Register handler FIRST - before sending - to avoid missing messages
+    // that might arrive before handler registration completes
     const unregister = wsManager.registerHandler(tabId, (message: any) => {
-      console.log(`[TRACE] Received message for tab ${tabId}:`, message);
+      clientLog('apiAdapter', `Received message for tab ${tabId}: ${JSON.stringify(message).substring(0, 200)}`);
 
       // Update status to connected when we receive output
       networkStatusManager.setStatus('connected');
@@ -451,7 +561,7 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
           });
           window.dispatchEvent(customEvent);
         } catch (e) {
-          console.error('[TRACE] Failed to parse Claude output:', e);
+          clientLog('apiAdapter', `Failed to parse Claude output: ${e}`, 'error');
         }
       } else if (message.type === 'completion') {
         const completeEvent = new CustomEvent('claude-complete', {
@@ -475,8 +585,20 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
     });
 
     // Send request when connection is ready
+    // Use a flag to track if the message has been sent
+    let messageSent = false;
+
     const checkAndSend = () => {
+      clientLog('apiAdapter', `checkAndSend - messageSent: ${messageSent}, readyState: ${session.ws.readyState}`);
+
+      // Prevent sending multiple messages
+      if (messageSent) {
+        clientLog('apiAdapter', 'checkAndSend - ALREADY SENT, skipping');
+        return;
+      }
+
       if (session.ws.readyState === WebSocket.OPEN) {
+        messageSent = true;
         // Generate UUID for idempotency (with fallback for browsers without crypto.randomUUID)
         const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
           ? crypto.randomUUID()
@@ -490,34 +612,50 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
           session_id: sessionId,
           images: params?.images || [],
         };
-        console.log(`[TRACE] Sending WebSocket request with UUID:`, request);
+        clientLog('apiAdapter', `Sending WebSocket request - uuid: ${uuid}, command_type: ${request.command_type}`);
         session.ws.send(JSON.stringify(request));
+        clientLog('apiAdapter', 'WebSocket send() called successfully');
+        // CRITICAL: Clear the timeout once message is sent - the connection is now established
+        // and we're waiting for the response, not for the connection to open
+        if (!messageSuccessfullySent) {
+          messageSuccessfullySent = true;
+          clearTimeout(sendTimeout);
+          clientLog('apiAdapter', 'sendTimeout cleared - message successfully sent');
+        }
       } else if (session.ws.readyState === WebSocket.CONNECTING) {
+        // Still connecting - schedule retry with timeout protection
+        clientLog('apiAdapter', 'WebSocket CONNECTING, scheduling retry in 50ms...');
         setTimeout(checkAndSend, 50);
       } else {
+        clientLog('apiAdapter', `WebSocket state: ${session.ws.readyState} (not OPEN or CONNECTING)`, 'error');
         unregister();
-        safeReject(new Error('WebSocket connection failed'));
+        safeReject(new Error('WebSocket connection failed - state: ' + session.ws.readyState));
       }
     };
 
-    session.ws.onopen = () => {
-      console.log('[TRACE] WebSocket connection opened');
+    // Handle connection opened - use addEventListener so wsManager's handler also runs
+    session.ws.addEventListener('open', () => {
+      clientLog('apiAdapter', 'onopen FIRED - calling checkAndSend');
       networkStatusManager.setStatus('connected');
-    };
+      checkAndSend();
+    });
 
-    session.ws.onerror = (error: Event) => {
-      console.error('[TRACE] WebSocket error:', error);
+    session.ws.addEventListener('error', (error: Event) => {
+      clientLog('apiAdapter', `onerror FIRED: ${error}`, 'error');
       networkStatusManager.setStatus('error');
-      unregister();
-      const errorEvent = new CustomEvent('claude-error', {
-        detail: 'WebSocket connection failed'
-      });
-      window.dispatchEvent(errorEvent);
-      safeReject(new Error('WebSocket connection failed'));
-    };
+      // Only reject if we haven't resolved yet
+      if (!isResolved) {
+        unregister();
+        const errorEvent = new CustomEvent('claude-error', {
+          detail: 'WebSocket connection failed'
+        });
+        window.dispatchEvent(errorEvent);
+        safeReject(new Error('WebSocket connection failed'));
+      }
+    });
 
-    session.ws.onclose = (event: CloseEvent) => {
-      console.log('[TRACE] WebSocket connection closed:', event.code, event.reason);
+    session.ws.addEventListener('close', (event: CloseEvent) => {
+      clientLog('apiAdapter', `WebSocket connection closed: code=${event.code}, reason=${event.reason}`);
       if (event.code !== 1000 && event.code !== 1001) {
         // Unexpected close - could indicate network issues
         networkStatusManager.setStatus('error');
@@ -529,7 +667,7 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
         // Normal close
         networkStatusManager.setStatus('disconnected');
       }
-    };
+    });
 
     checkAndSend();
   });
@@ -539,8 +677,12 @@ async function handleStreamingCommand<T>(command: string, params?: any): Promise
  * Unified API adapter that works in both Tauri and web environments
  */
 export async function apiCall<T>(command: string, params?: any): Promise<T> {
+  clientLog('apiAdapter', `apiCall ENTERED - command: ${command}`);
+  clientLog('apiAdapter', `apiCall params: ${JSON.stringify(params || {})}`);
+
   const isWeb = !detectEnvironment();
-  
+  clientLog('apiAdapter', `isWeb: ${isWeb}`);
+
   if (!isWeb) {
     console.log(`[Tauri] Calling: ${command}`, params);
     try {

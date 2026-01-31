@@ -192,10 +192,16 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
     queuedPromptsRef.current = queuedPrompts;
   }, [queuedPrompts]);
 
-  // Get effective session info (from prop or extracted) - use useMemo to ensure it updates
+  // Get effective session info (from prop, extracted, or restored session) - use useMemo to ensure it updates
   const effectiveSession = useMemo(() => {
-    if (session) return session;
+    // Priority 1: Use session prop (from TabContext restoration)
+    if (session) {
+      console.log('[ClaudeCodeSession] Using session from props (restored):', session.id);
+      return session;
+    }
+    // Priority 2: Use extracted session info (from Claude init message)
     if (extractedSessionInfo) {
+      console.log('[ClaudeCodeSession] Using extracted session info:', extractedSessionInfo.sessionId);
       return {
         id: extractedSessionInfo.sessionId,
         project_id: extractedSessionInfo.projectId,
@@ -203,6 +209,7 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
         created_at: Date.now(),
       } as Session;
     }
+    console.log('[ClaudeCodeSession] No session available - will create new');
     return null;
   }, [session, extractedSessionInfo, projectPath]);
 
@@ -919,6 +926,7 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
         if (!isTabActive) {
           console.log('[ClaudeCodeSession] Ignoring prompt - tab is not active');
           setIsLoading(false);
+          isListeningRef.current = false; // Reset listening state so future prompts can be sent
           return;
         }
 
@@ -937,9 +945,11 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
       }
     } catch (err) {
       console.error("Failed to send prompt:", err);
-      setError("Failed to send prompt");
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setError(errorMessage);
       setIsLoading(false);
       hasActiveSessionRef.current = false;
+      isListeningRef.current = false; // Reset listening state on error
     }
   };
 
